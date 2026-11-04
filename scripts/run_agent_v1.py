@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-"""Run the v1 Agent (5 rounds) and its same-budget controls on one dataset.
+"""Run the v1.1 Agent and its same-budget controls on one dataset.
 
 The dataset is injected through a ``DatasetSpec`` file; this script holds no
-dataset-specific logic.  Test is opened once, for the champion only.
+dataset-specific logic.  Every arm is repeated over several split seeds, and the
+test partition is scored once, for the champion only.
 """
 
 from __future__ import annotations
@@ -26,7 +27,17 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--per-round", type=int, default=3)
-    parser.add_argument("--seed", type=int, default=20261104)
+    parser.add_argument(
+        "--seeds",
+        default="20261104",
+        help="comma separated split seeds, for example 20261104,1,2,3,4",
+    )
+    parser.add_argument(
+        "--validation-repeats",
+        type=int,
+        default=3,
+        help="group-isolated validation splits averaged per trial",
+    )
     parser.add_argument(
         "--arms",
         default="agent,random,fixed,exhaustive",
@@ -38,6 +49,7 @@ def main() -> int:
     parser.add_argument("--no-test", action="store_true")
     args = parser.parse_args()
 
+    seeds = tuple(int(part) for part in args.seeds.split(",") if part.strip())
     spec = load_dataset_spec(args.spec)
     summary = run_agent(
         spec,
@@ -45,14 +57,15 @@ def main() -> int:
         args.output,
         rounds=args.rounds,
         per_round=args.per_round,
-        seed=args.seed,
+        seeds=seeds,
+        validation_repeats=args.validation_repeats,
         arms=tuple(part.strip() for part in args.arms.split(",") if part.strip()),
         cache_root=args.cache_root,
         memory_path=args.memory,
         model_id=args.model_id,
         run_test=not args.no_test,
     )
-    print(json.dumps(summary["arms"], ensure_ascii=False, indent=2))
+    print(json.dumps(summary["aggregate"], ensure_ascii=False, indent=2))
     if summary["champion"]:
         print(f"champion: {summary['champion']['method']} + {summary['champion']['classifier']}")
         print(f"champion validation: {summary['champion_validation']}")

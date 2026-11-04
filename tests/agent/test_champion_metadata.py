@@ -64,6 +64,8 @@ def test_champion_artifact_describes_the_selected_model(tiny_dataset, tmp_path: 
         output,
         rounds=1,
         per_round=4,
+        seeds=(7,),
+        validation_repeats=1,
         arms=("agent",),
         pool=pool,
         run_id="metadata-run",

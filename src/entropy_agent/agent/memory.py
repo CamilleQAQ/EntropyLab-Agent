@@ -1,7 +1,9 @@
 """SQLite experiment memory: every trial survives, including failures.
 
 The schema is deliberately plain so the table can be inspected with any SQLite
-client and every reported number can be recomputed from a trial row.
+client and every reported number can be recomputed from a trial row.  v1.1 adds
+the split seed, the repeated-validation mean and standard deviation, how many
+feature rows the trial actually paid for, and why the selector proposed it.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS trials (
     run_id TEXT NOT NULL,
     arm TEXT NOT NULL,
+    seed INTEGER NOT NULL DEFAULT 0,
     trial_index INTEGER NOT NULL,
     round_index INTEGER NOT NULL,
     candidate_id TEXT NOT NULL,
@@ -36,17 +39,29 @@ CREATE TABLE IF NOT EXISTS trials (
     classifier_parameters TEXT NOT NULL,
     feature_key TEXT NOT NULL,
     cache_hit INTEGER NOT NULL,
+    extracted_records INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     failure TEXT,
     val_accuracy REAL,
+    val_accuracy_std REAL,
     val_macro_f1 REAL,
+    val_macro_f1_std REAL,
+    reason TEXT,
     extract_seconds REAL NOT NULL,
     fit_seconds REAL NOT NULL,
     created_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, arm, trial_index)
+    PRIMARY KEY (run_id, arm, seed, trial_index)
 );
 CREATE INDEX IF NOT EXISTS trials_by_run ON trials (run_id, arm, trial_index);
 """
+
+_TRIAL_COLUMNS = {
+    "seed": "INTEGER NOT NULL DEFAULT 0",
+    "extracted_records": "INTEGER NOT NULL DEFAULT 0",
+    "val_accuracy_std": "REAL",
+    "val_macro_f1_std": "REAL",
+    "reason": "TEXT",
+}
 
 
 def _now() -> str:
@@ -60,7 +75,20 @@ class ExperimentMemory:
         self._connection = sqlite3.connect(self.path)
         self._connection.row_factory = sqlite3.Row
         self._connection.executescript(SCHEMA)
+        self._migrate()
         self._connection.commit()
+
+    def _migrate(self) -> None:
+        """Add v1.1 columns to a dataset written by v1 instead of failing."""
+        existing = {
+            row["name"]
+            for row in self._connection.execute("PRAGMA table_info(trials)")
+        }
+        for name, definition in _TRIAL_COLUMNS.items():
+            if name not in existing:
+                self._connection.execute(
+                    f"ALTER TABLE trials ADD COLUMN {name} {definition}"
+                )
 
     def close(self) -> None:
         self._connection.close()
@@ -93,34 +121,40 @@ class ExperimentMemory:
         *,
         run_id: str,
         arm: str,
+        seed: int,
         trial_index: int,
         round_index: int,
         candidate: dict,
         feature_key: str,
         cache_hit: bool,
+        extracted_records: int,
         status: str,
         failure: str | None,
         val_accuracy: float | None,
         val_macro_f1: float | None,
+        val_accuracy_std: float | None,
+        val_macro_f1_std: float | None,
+        reason: str | None,
         extract_seconds: float,
         fit_seconds: float,
     ) -> None:
         self._connection.execute(
             "INSERT OR REPLACE INTO trials ("
-            "run_id, arm, trial_index, round_index, candidate_id, method, family, "
+            "run_id, arm, seed, trial_index, round_index, candidate_id, method, family, "
             "method_parameters, classifier, classifier_backend, classifier_parameters, "
-            "feature_key, cache_hit, status, failure, val_accuracy, val_macro_f1, "
-            "extract_seconds, fit_seconds, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "feature_key, cache_hit, extracted_records, status, failure, val_accuracy, "
+            "val_accuracy_std, val_macro_f1, val_macro_f1_std, reason, extract_seconds, "
+            "fit_seconds, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                run_id, arm, trial_index, round_index,
+                run_id, arm, seed, trial_index, round_index,
                 candidate["candidate_id"], candidate["method"], candidate["family"],
                 json.dumps(candidate["method_parameters"], sort_keys=True),
                 candidate["classifier"], candidate["classifier_backend"],
                 json.dumps(candidate["classifier_parameters"], sort_keys=True),
-                feature_key, int(cache_hit), status, failure,
-                val_accuracy, val_macro_f1, float(extract_seconds), float(fit_seconds),
-                _now(),
+                feature_key, int(cache_hit), int(extracted_records), status, failure,
+                val_accuracy, val_accuracy_std, val_macro_f1, val_macro_f1_std,
+                reason, float(extract_seconds), float(fit_seconds), _now(),
             ),
         )
         self._connection.commit()
@@ -133,13 +167,16 @@ class ExperimentMemory:
         )
         self._connection.commit()
 
-    def trials(self, run_id: str, arm: str | None = None) -> list[dict]:
+    def trials(self, run_id: str, arm: str | None = None, seed: int | None = None) -> list[dict]:
         query = "SELECT * FROM trials WHERE run_id = ?"
         parameters: list[object] = [run_id]
         if arm is not None:
             query += " AND arm = ?"
             parameters.append(arm)
-        query += " ORDER BY arm, trial_index"
+        if seed is not None:
+            query += " AND seed = ?"
+            parameters.append(seed)
+        query += " ORDER BY arm, seed, trial_index"
         rows = self._connection.execute(query, parameters).fetchall()
         return [_trial_row(row) for row in rows]
 
@@ -165,6 +202,7 @@ def _trial_row(row: sqlite3.Row) -> dict:
     return {
         "run_id": row["run_id"],
         "arm": row["arm"],
+        "seed": row["seed"],
         "trial_index": row["trial_index"],
         "round_index": row["round_index"],
         "candidate_id": row["candidate_id"],
@@ -176,10 +214,14 @@ def _trial_row(row: sqlite3.Row) -> dict:
         "classifier_parameters": json.loads(row["classifier_parameters"]),
         "feature_key": row["feature_key"],
         "cache_hit": bool(row["cache_hit"]),
+        "extracted_records": row["extracted_records"],
         "status": row["status"],
         "failure": row["failure"],
         "val_accuracy": row["val_accuracy"],
+        "val_accuracy_std": row["val_accuracy_std"],
         "val_macro_f1": row["val_macro_f1"],
+        "val_macro_f1_std": row["val_macro_f1_std"],
+        "reason": row["reason"],
         "extract_seconds": row["extract_seconds"],
         "fit_seconds": row["fit_seconds"],
         "created_at": row["created_at"],

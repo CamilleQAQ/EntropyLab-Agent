@@ -12,11 +12,10 @@
 
 两个 anchor 都已完成并冻结：Aero-engine 5 类 **98.33%** test，Triaxial 7 类
 **77.38%** test（作者自存的同类结果是 83.28%，论文的 97.46% 对不上，见 `docs/06`）。
-Agent v1 已跑通（Aero：15 个 trial，validation 98.33%，冠军 test 100%）；
-但选型效果只与随机臂持平，输给固定顺序与穷举上界（见 `docs/07`）。
-OOD 做了留一类验证，**结果是负的**：已知类零误拒，未知类误接受率 53%
-（见 `docs/08`），所以现在不能说“能识别未知信号”。
-下一步：**Agent v1.1 修选择器** + 逐记录缓存，然后跑 Triaxial。
+Agent v1.1 已完成（逐记录缓存 + 3 次切分 + 5 seed）：工程目标全部达成，
+但**选型仍是负结果**——agent 0.9922 < random 0.9944 < fixed = exhaustive 0.9967（见 `docs/09`）。
+OOD 留一类验证也是负结果：未知类误接受率 53%（见 `docs/08`）。
+下一步：**v1.2 广度优先选择器**，并在 **Triaxial**（未饱和）上验证；aero 已经无法区分策略。
 
 ---
 
@@ -107,8 +106,8 @@ src/entropy_agent/
   io/                         DatasetSpec、CSV/NPY/NPZ/MAT、窗口
   training/                   grouped split + generic training
   diagnosis/                  v4 artifact、runner、profile registry
-  agent/                      v1 5 轮选型、特征缓存、SQLite 实验记忆
-tests/                        251 passed（231 旧 + 20 Agent/元数据）
+  agent/                      v1.1 5 轮选型、逐记录缓存、多次切分、多 seed、SQLite 记忆
+tests/                        258 passed（231 旧 + 27 Agent v1.1）
 ```
 
 ### 还没迁移/还没做
@@ -127,7 +126,7 @@ $env:PYTHONPATH="$PWD\src"
 python -m pytest tests -q --basetemp="$PWD\.pytest-tmp"
 ```
 
-当前结果：**251 passed**。
+当前结果：**258 passed**。
 
 在 DSH 的受限沙箱里跑不通：pytest 要创建/删除临时目录，会被沙箱拒绝（表现为
 大量 setup error + `sessionfinish` 的 `PermissionError`）。用「完全权限」跑即可。
@@ -234,6 +233,36 @@ docs/07_agent_v1.md
 results/agent-v1-aero-20261104/
 ```
 
+### Agent v1.1（Aero-engine 5 状态，5 seed）
+
+逐记录缓存 + 每 trial 3 次切分 mean±std + 5 个 seed 的同预算对比。
+
+| 臂 | 均值 Macro-F1 | 标准差 | 胜场（共 5） |
+|---|---:|---:|---:|
+| agent | 0.9922 | 0.0045 | 1 |
+| random | 0.9944 | 0.0050 | 3 |
+| fixed | **0.9967** | **0.0027** | 5 |
+| exhaustive | 0.9967 | 0.0027 | 5 |
+
+冠军 `RCMFuDE + SVM-RBF`：validation 1.0000 ± 0.0000，**唯一一次 test = 98.33%**。
+
+关键成本事实：5 seed × 4 臂 = 465 个 trial 的**特征提取为 0 秒**（逐记录缓存复用），
+拟合共 143.6 s。v1 冷启动时提 8 种熵要 477–564 s。
+
+**结论仍然是负的**：agent < random < fixed = exhaustive，且 5 个 seed 一致。
+原因是“方法只测一次就锁死”（RCMDE 0.9889 后 9 个 trial 全给它），
+以及深度优先用光预算。见 `docs/09` §4、§7。
+
+文件：
+
+```text
+src/entropy_agent/agent/
+scripts/run_agent_v1.py
+docs/09_agent_v1_1.md
+results/agent-v1_1-aero-20261104/
+results/agent-v1_1-cache/
+```
+
 ### OOD 验证（aero，留一类）—— 负结果
 
 5 折留一类，阈值只用各折 validation 校准；已知 240 条、未知 300 条。
@@ -274,9 +303,10 @@ results/ood-aero-20261104/
 
 见 `docs/06_triaxial_reproduction.md`。冻结，不再重跑。
 
-### 第二步：Agent v1 —— 已完成初版
+### 第二步：Agent v1 / v1.1 —— 已完成
 
-见 `docs/07_agent_v1.md`。可运行、可审计、test 只开一次，但选型效果只与随机臂持平。
+见 `docs/07_agent_v1.md`（v1）与 `docs/09_agent_v1_1.md`（v1.1）。
+可运行、可审计、test 只开一次；但两版的选型效果都是负结果。
 
 已实现的闭环：
 
@@ -296,28 +326,24 @@ DataProfile
 src/entropy_agent/agent/
   profile.py      DataProfile
   candidates.py   8 种熵 × 6 个分类器 = 48
-  cache.py        特征缓存（按数据集契约 + 记录集做 key）
-  memory.py       SQLite runs / trials
-  selector.py     确定性排序
-  loop.py         四臂、冠军、唯一一次 test、报告
+  cache.py        逐记录特征缓存（key 只含数据集契约）
+  memory.py       SQLite runs / trials（含 seed、mean±std、reason）
+  selector.py     确定性排序（成本感知 + 理由）
+  loop.py         多 seed、多次切分、四臂、冠军、唯一一次 test、报告
 ```
 
-下一步（v1.1，还没做）：
-
-- 分类器当免费资源：已提取过特征的方法，先扫完分类器再换方法；
-- 家族内不确定性：只试过 1 个分类器的方法不应被判“差”；
-- 冠军稳定性：validation 只有 60 条，1 条记录就翻转排名，需要用重复切分或置信区间。
+v1.1 已解决、v1.2 仍需处理的：见 §10。
 
 先不要用 LLM 直接决定模型；LLM 只做候选排序/解释，所有执行走确定性 runner。
 
-### 第三步：在 Aero-engine 5 类上验证 Agent —— 已完成
+### 第三步：在 Aero-engine 5 类上验证 Agent —— 已完成（负结果）
 
 - Anchor：TSMEFuDE + BT-LSTSVM = 98.33% test；
-- Agent 15 个 trial 拿到 val 98.33%，冠军 `RCMDE + SVM-RBF`，test 100%（只开一次）；
-- 穷举上界 val 100%（4 个 `LSTSVM` 组合），Agent 差 1 条验证记录；
-- 每轮选择、validation、耗时、失败都记录在 `results/agent-v1-aero-20261104/`；
-- 下一步：v1.1 修选择器后，用同一套代码跑 Triaxial（不改代码），验证选型不是对
-  Aero-engine 过拟合。Triaxial 的 severity 上限只有 ~77–83%，不要拿 test 去调。
+- v1：15 个 trial，val 98.33%，test 100%（只开一次），与随机臂持平；
+- v1.1：5 seed × 4 臂，agent 0.9922 < random 0.9944 < fixed = exhaustive 0.9967；
+- 结论：aero 已饱和，策略差异小于单 trial 波动，**不能**声称 Agent 更好；
+- 下一步：v1.2 广度优先选择器 → 在 Triaxial（77–83%）上验证，那里不同组合差 3–6 个点；
+- Triaxial 的 severity 上限只有 ~77–83%，不要拿 test 去调。
 
 ### 第四步：持续学习
 
@@ -366,21 +392,24 @@ src/entropy_agent/agent/
 
 ```text
 1. 读 HANDOFF.md
-2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（Agent v1）、docs/08（OOD）
-3. 用「完全权限」跑 251 tests（受限沙箱会挡住 pytest 临时目录）
-4. 检查 anchor / agent-v1 / ood 的 results/ 是否还在
-5. 做 Agent v1.1（逐记录缓存 + 选择器），再跑 Triaxial
+2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、docs/09（v1.1）
+3. 用「完全权限」跑 258 tests（受限沙箱会挡住 pytest 临时目录）
+4. 检查 anchor / agent-v1_1 / ood 的 results/ 是否还在
+5. 做 Agent v1.2（广度优先选择器），然后在 Triaxial 上验证
 ```
 
 不要重新论证论文方法是否有效，也不要再重跑两个 anchor。  
-Aero-engine 98.33% + Triaxial 77.38% 已经证明主链路可用；Agent v1 证明闭环可运行；
-OOD 的负结果已经写进 `docs/08`，不要把它说成正向能力。
+Aero-engine 98.33% + Triaxial 77.38% 已经证明主链路可用；Agent v1.1 证明闭环与缓存可运行；
+OOD 与 Agent 选型的负结果已经写进 `docs/08`、`docs/09`，不要把它们说成正向能力。
 
 ---
 
-## 10. Agent 已知缺陷（v1.1 的输入）
+## 10. Agent 已知缺陷（v1.2 的输入）
 
-1. 选择器贪心：第 2 轮起锁在 0.9833 平台，15 次里没有一次试 `LSTSVM`，
-   而穷举前 4 名全是 `LSTSVM`。
-2. 没有利用“分类器几乎免费”这一事实：已提取特征的方法应先把分类器扫完。
-3. 冠军判定只看单次 validation（60 条），1 条记录就翻转排名，缺稳定性度量。
+1. **方法只测一次就锁死**：第 1 轮 RCMDE 报 0.9889，之后 9 个 trial 全给它和 IMFRDE，
+   真正能到 0.9967 的 `TSMEFuDE + SVM-RBF` / `RCMFuDE + LSTSVM` 从未被组合到。
+2. **深度优先用光预算**：15 个 trial 只覆盖 6 个方法，v1.2 应先“8 方法各 1 个分类器 = 8 次”，
+   再用剩余 7 次深化。
+3. **方法排序用均值而不是下置信界**：`mean − std` 会惩罚只测过一次的方法。
+4. **aero 已饱和**：大量组合落在 0.98–1.00，0.2 个百分点的差别小于单 trial 的 std，
+   策略好坏在这个数据集上无法分辨，必须换 Triaxial（77–83%）验证。
