@@ -1,0 +1,87 @@
+{
+  "format": "entropylab.dataset-spec",
+  "format_version": 1,
+  "dataset_id": "TRIAXIAL_7CLASS_TSMEFUDE_BTLSSVM",
+  "sampling_rate_hz": 10000,
+  "input": {
+    "channel": 0,
+    "key": null,
+    "sample_axis": -1,
+    "indices": [],
+    "has_header": false,
+    "delimiter": ",",
+    "skip_rows": 0
+  },
+  "layout": {
+    "loader": "npy_tensor",
+    "file_pattern": "**/*.npy",
+    "manifest": null,
+    "label_source": "parent",
+    "group_source": "file",
+    "group_regex": null,
+    "packed_files": [
+      {"path": "class1.npy", "label": "INNER_RACE_0.7MM"},
+      {"path": "class2.npy", "label": "INNER_RACE_0.9MM"},
+      {"path": "class3.npy", "label": "INNER_RACE_1.1MM"},
+      {"path": "class4.npy", "label": "INNER_RACE_1.3MM"},
+      {"path": "class5.npy", "label": "INNER_RACE_1.5MM"},
+      {"path": "class6.npy", "label": "INNER_RACE_1.7MM"},
+      {"path": "class7.npy", "label": "HEALTHY"}
+    ],
+    "record_axis": 0,
+    "channel_axis": 1,
+    "sample_axis": 2,
+    "group_size": 6
+  },
+  "labels": {
+    "names": [
+      "INNER_RACE_0.7MM",
+      "INNER_RACE_0.9MM",
+      "INNER_RACE_1.1MM",
+      "INNER_RACE_1.3MM",
+      "INNER_RACE_1.5MM",
+      "INNER_RACE_1.7MM",
+      "HEALTHY"
+    ],
+    "mapping": {
+      "INNER_RACE_0.7MM": 0,
+      "INNER_RACE_0.9MM": 1,
+      "INNER_RACE_1.1MM": 2,
+      "INNER_RACE_1.3MM": 3,
+      "INNER_RACE_1.5MM": 4,
+      "INNER_RACE_1.7MM": 5,
+      "HEALTHY": 6
+    },
+    "healthy_class_id": 6
+  },
+  "window": {"size": 1892, "stride": 1892, "windows_per_record": 1},
+  "preprocessing": "NONE",
+  "feature": {
+    "method": "TSMEFuDE",
+    "parameters": {"m": 2, "nc": 5, "tau": 1, "kmax": 20}
+  },
+  "classifier": {
+    "algorithm": "BT-LSTSVM",
+    "backend": "torch",
+    "parameters": {"c1": 1.0, "c2": 1.0, "bandwidth": 1.0, "epsilon": 0.0001}
+  },
+  "split": {
+    "mode": "random",
+    "seed": 20261104,
+    "train_fraction": 0.6,
+    "validation_fraction": 0.2
+  },
+  "ood": {"calibration": "DISABLED", "margin": 1.05},
+  "diagnosis": {
+    "profile_id": "TRIAXIAL_7CLASS",
+    "display_name": "Triaxial 7-state (300 W inner race + healthy), TSMEFuDE + BT-LSTSVM",
+    "workflow": "MODEL_ARTIFACT_DIAGNOSIS",
+    "signal_type": "ACCELERATION",
+    "signal_role": "TRIAXIAL_X_AXIS_300W",
+    "sampling_rate_tolerance_hz": 0,
+    "minimum_window_count": 1,
+    "evidence_window_count": 1,
+    "validation_scope": "random group-isolated holdout on the triaxial 7-state paper protocol",
+    "experimental": true
+  }
+}

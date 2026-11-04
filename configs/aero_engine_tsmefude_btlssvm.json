@@ -1,0 +1,69 @@
+{
+  "format": "entropylab.dataset-spec",
+  "format_version": 1,
+  "dataset_id": "AERO_ENGINE_TSMEFUDE_BTLSSVM_V2",
+  "sampling_rate_hz": 25000,
+  "input": {
+    "channel": 2,
+    "key": null,
+    "sample_axis": -1,
+    "indices": [],
+    "has_header": false,
+    "delimiter": ",",
+    "skip_rows": 0
+  },
+  "layout": {
+    "loader": "npy_tensor",
+    "file_pattern": "**/*.npy",
+    "manifest": null,
+    "label_source": "parent",
+    "group_source": "file",
+    "group_regex": null,
+    "packed_files": [
+      {"path": "data1.npy", "label": "healthy"},
+      {"path": "data2.npy", "label": "healthy"},
+      {"path": "data3.npy", "label": "fault"},
+      {"path": "data4.npy", "label": "fault"},
+      {"path": "data5.npy", "label": "fault"}
+    ],
+    "record_axis": 0,
+    "channel_axis": 1,
+    "sample_axis": 2,
+    "group_size": 18
+  },
+  "labels": {
+    "names": ["healthy", "fault"],
+    "mapping": {"healthy": 0, "fault": 1},
+    "healthy_class_id": 0
+  },
+  "window": {"size": 2000, "stride": 2000, "windows_per_record": 1},
+  "preprocessing": "NONE",
+  "feature": {
+    "method": "TSMEFuDE",
+    "parameters": {"m": 2, "nc": 5, "tau": 1, "kmax": 20}
+  },
+  "classifier": {
+    "algorithm": "BT-LSTSVM",
+    "backend": "torch",
+    "parameters": {"c1": 1.0, "c2": 1.0, "bandwidth": 1.0, "epsilon": 0.0001}
+  },
+  "split": {
+    "mode": "random",
+    "seed": 20260928,
+    "train_fraction": 0.6,
+    "validation_fraction": 0.2
+  },
+  "ood": {"calibration": "DISABLED", "margin": 1.05},
+  "diagnosis": {
+    "profile_id": "AERO_ENGINE_TSMEFUDE_BTLSSVM",
+    "display_name": "Aero-engine inter-shaft bearing, TSMEFuDE + BT-LSTSVM",
+    "workflow": "MODEL_ARTIFACT_DIAGNOSIS",
+    "signal_type": "ACCELERATION",
+    "signal_role": "AERO_ENGINE_CHANNEL_2",
+    "sampling_rate_tolerance_hz": 0,
+    "minimum_window_count": 1,
+    "evidence_window_count": 3,
+    "validation_scope": "random group-isolated holdout on the configured aero-engine source",
+    "experimental": true
+  }
+}
