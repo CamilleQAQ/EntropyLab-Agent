@@ -160,9 +160,13 @@ def classification_metrics(
         result.update({
             "binary_accuracy": float(metrics.accuracy_score(true_binary, predicted_binary)),
             "binary_confusion_matrix": matrix.tolist(),
-            "healthy_recall": float(matrix[0, 0] / matrix[0].sum()),
-            "fault_recall": float(matrix[1, 1] / matrix[1].sum()),
         })
+        # A partition that contains only one side of the collapse has no recall
+        # to report; emitting NaN here would make the artifact unsaveable.
+        if matrix[0].sum() > 0:
+            result["healthy_recall"] = float(matrix[0, 0] / matrix[0].sum())
+        if matrix[1].sum() > 0:
+            result["fault_recall"] = float(matrix[1, 1] / matrix[1].sum())
 
     return result
 

@@ -13,8 +13,10 @@
 两个 anchor 都已完成并冻结：Aero-engine 5 类 **98.33%** test，Triaxial 7 类
 **77.38%** test（作者自存的同类结果是 83.28%，论文的 97.46% 对不上，见 `docs/06`）。
 Agent v1 已跑通（Aero：15 个 trial，validation 98.33%，冠军 test 100%）；
-但选型效果只与随机臂持平，输给固定顺序与穷举上界，所以下一步是 **v1.1 修选择器**，
-再去跑 Triaxial（见 `docs/07`）。
+但选型效果只与随机臂持平，输给固定顺序与穷举上界（见 `docs/07`）。
+OOD 做了留一类验证，**结果是负的**：已知类零误拒，未知类误接受率 53%
+（见 `docs/08`），所以现在不能说“能识别未知信号”。
+下一步：**Agent v1.1 修选择器** + 逐记录缓存，然后跑 Triaxial。
 
 ---
 
@@ -232,12 +234,37 @@ docs/07_agent_v1.md
 results/agent-v1-aero-20261104/
 ```
 
+### OOD 验证（aero，留一类）—— 负结果
+
+5 折留一类，阈值只用各折 validation 校准；已知 240 条、未知 300 条。
+
+| margin | 误拒率 FRR | 未知类误接受率 FAR |
+|---:|---:|---:|
+| 1.00 | 0.0% | **53.3%** |
+| 1.05 | 0.0% | 57.0% |
+| 1.20 | 0.0% | 64.3% |
+
+已知类一侧完美（240/240 全对），但**未知类一半被硬分到某个已知类**。
+原因：留出类的特征落在已知类的云团内部（state1/state5 的未知记录有 92%/83%
+低于已知类的最大距离），只有 state3 能被干净拒掉。
+真实诊断入口复核 40 条信号，判定 0 处不一致——所以不是实现 bug，是度量不可分。
+
+**结论**：两个 anchor 保持 `ood.calibration = "DISABLED"` 是对的；
+现在只能说“实现了拒识机制”，**不能说“支持未知信号拒识”**。
+
+```text
+scripts/run_ood_validation.py
+docs/08_ood_validation.md
+results/ood-aero-20261104/
+```
+
 ### 作废结果，不要再引用
 
 - Aero-engine 二分类 69.7%：旧配置，不是论文 5 类协议；
 - Paderborn 24%–40%：cross-bearing stress test，不是论文主线；
 - MDE 不是论文主方法，不要围绕它排查；
-- Triaxial 97.46%：见上，论文正文数字与作者存档不一致，未复现。
+- Triaxial 97.46%：见上，论文正文数字与作者存档不一致，未复现；
+- “OOD 能识别未知信号”：见上，aero 留一类 FAR 53%，不成立。
 
 ---
 
@@ -327,8 +354,11 @@ src/entropy_agent/agent/
 - 作者自存的三轴准确率 83.28% 与论文表里的 97.46% 对不上，尚未向作者求证；
 - ESWA 论文的 CWRU / Politecnico / Wind 数据尚未复现；
 - Agent v1 选择器偏贪心，15 次里没试过 `LSTSVM`，见 §10；
+- OOD 在 aero 上不可用（留一类 FAR 53%），且 schema 把 `margin` 限制在 ≥1，
+  连收紧阈值都做不到，见 `docs/08`；
+- 特征缓存按“记录集”做 key，换一次切分就要重提 8 次特征；多 seed 对比前要改成逐记录；
 - 持续学习 replay 仍待重写；
-- `renovation` 还没 `git init`（只有 `.gitignore`），历史无法回溯。
+- git 已初始化并完成首个提交（`c97c332`），`data/`、`results/`、`tmp/` 均被忽略。
 
 ---
 
@@ -336,14 +366,15 @@ src/entropy_agent/agent/
 
 ```text
 1. 读 HANDOFF.md
-2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（Agent v1）
+2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（Agent v1）、docs/08（OOD）
 3. 用「完全权限」跑 251 tests（受限沙箱会挡住 pytest 临时目录）
-4. 检查两个 anchor 与 agent-v1 的 results/ 是否还在
-5. 做 Agent v1.1（选择器），再跑 Triaxial
+4. 检查 anchor / agent-v1 / ood 的 results/ 是否还在
+5. 做 Agent v1.1（逐记录缓存 + 选择器），再跑 Triaxial
 ```
 
 不要重新论证论文方法是否有效，也不要再重跑两个 anchor。  
-Aero-engine 98.33% + Triaxial 77.38% 已经证明主链路可用；Agent v1 证明闭环可运行。
+Aero-engine 98.33% + Triaxial 77.38% 已经证明主链路可用；Agent v1 证明闭环可运行；
+OOD 的负结果已经写进 `docs/08`，不要把它说成正向能力。
 
 ---
 
