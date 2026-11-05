@@ -19,6 +19,12 @@ from dataclasses import dataclass
 # Methods disagree on the name of their coarsest scale parameter.
 SCALE_PARAMETERS = ("scale", "kmax")
 
+# Deterministic descriptor families: no pattern/scale constraint, but a spectral
+# or envelope descriptor on a handful of samples is meaningless, so a small floor
+# keeps the Agent from paying for a degenerate window.
+FUSION_PREFIX = "FUSION_"
+FUSION_MINIMUM_WINDOW = 16
+
 
 @dataclass(frozen=True)
 class Feasibility:
@@ -29,6 +35,8 @@ class Feasibility:
 
 def required_window(method: str, parameters: dict) -> int:
     """Smallest window length that can produce at least one pattern."""
+    if method.startswith(FUSION_PREFIX):
+        return FUSION_MINIMUM_WINDOW
     m = int(parameters.get("m", 2))
     tau = int(parameters.get("tau", 1))
     scale = 1
@@ -44,6 +52,12 @@ def check(method: str, parameters: dict, window_size: int) -> Feasibility:
     required = required_window(method, parameters)
     if window_size >= required:
         return Feasibility(True, required, "")
+    if method.startswith(FUSION_PREFIX):
+        return Feasibility(
+            False,
+            required,
+            f"window {window_size} < {required} (fusion descriptors need at least {FUSION_MINIMUM_WINDOW} samples)",
+        )
     m = int(parameters.get("m", 2))
     tau = int(parameters.get("tau", 1))
     scale = next(

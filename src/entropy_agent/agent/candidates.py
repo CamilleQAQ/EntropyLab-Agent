@@ -1,6 +1,9 @@
 """Deterministic, dataset-agnostic candidate pool for the v1 selector.
 
-The pool lists (entropy method, its parameters) x (classifier, its parameters).
+The pool lists (feature method, its parameters) x (classifier, its parameters).
+Feature methods are the eight entropy methods plus the deterministic
+FUSION_* time/frequency/envelope families: a dataset whose class signal is
+energy-based (see the gear dataset) cannot be served by entropy features alone.
 Nothing here knows about a dataset: the same pool serves every injected
 ``DatasetSpec``.  Parameter values are explicit rather than implicit defaults so
 that the pool is reproducible across library versions and so that the paper
@@ -13,7 +16,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from ..analysis.methods import METHOD_FAMILIES
+from ..analysis.methods import FEATURE_FAMILIES
 
 
 def _digest(value: object) -> str:
@@ -28,7 +31,7 @@ class MethodSpec:
 
     @property
     def family(self) -> str:
-        return METHOD_FAMILIES.get(self.method, "unknown")
+        return FEATURE_FAMILIES.get(self.method, "unknown")
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,14 @@ DEFAULT_METHODS: tuple[MethodSpec, ...] = (
     MethodSpec("RCMDE", {"m": 2, "nc": 5, "tau": 1, "scale": 20}),
     MethodSpec("MDE", {"m": 2, "nc": 5, "tau": 1, "scale": 20}),
     MethodSpec("MPE", {"m": 3, "tau": 1, "scale": 20}),
+    # Deterministic time/frequency/envelope descriptors.  They are orders of
+    # magnitude cheaper than an entropy extraction (milliseconds per window) and
+    # they keep the amplitude/energy information that entropy normalises away.
+    MethodSpec("FUSION_TIME", {}),
+    MethodSpec("FUSION_TIME_SPEC", {}),
+    MethodSpec("FUSION_TIME_ENVELOPE", {}),
+    MethodSpec("FUSION_TIME_ENVELOPE_ENTROPY", {}),
+    MethodSpec("FUSION_ALL", {}),
 )
 
 DEFAULT_CLASSIFIERS: tuple[ClassifierSpec, ...] = (
