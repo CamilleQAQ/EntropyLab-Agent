@@ -217,7 +217,9 @@ def run_continual(
 
     holdout = None
     if run_holdout:
-        # One test phase, three already-frozen models.
+        # One test phase, three already-frozen models.  Per-record predictions are
+        # kept so paired comparisons (McNemar, paired bootstrap) are possible.
+        test_indices = np.flatnonzero(joint_masks["test"])
         holdout = {}
         for name, model in (
             ("frozen", frozen.model if frozen else None),
@@ -226,13 +228,21 @@ def run_continual(
         ):
             if model is None:
                 continue
-            metrics, _, _, _ = evaluate_partition(
+            metrics, record_predictions, _, _ = evaluate_partition(
                 joint_prepared, model, "test", healthy_class_id=healthy
             )
             holdout[name] = {
                 "accuracy": float(metrics["multiclass_accuracy"]),
                 "macro_f1": float(metrics["multiclass_macro_f1"]),
                 "records": int(joint_masks["test"].sum()),
+                "predictions": [
+                    {
+                        "record_id": records[int(index)].record_id,
+                        "truth": int(labels[int(index)]),
+                        "predicted": int(record_predictions[position]),
+                    }
+                    for position, index in enumerate(test_indices)
+                ],
             }
 
     summary = {

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -52,6 +53,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--margin", type=float, default=0.005)
     parser.add_argument("--dataset-id", default=None, help="override the dataset id from the manifest")
+    parser.add_argument("--seed", type=int, default=20261104, help="shuffle units before allocating")
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -67,6 +69,7 @@ def main() -> int:
         for index, row in enumerate(entry["files"]):
             by_unit[row["unit"]].append(index)
         units = sorted(by_unit)
+        random.Random(args.seed + class_id).shuffle(units)
         counts = _largest_remainder(len(units), SHARES)
         cursor = 0
         for name, _ in SHARES:
