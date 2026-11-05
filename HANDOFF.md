@@ -12,10 +12,12 @@
 
 两个 anchor 都已完成并冻结：Aero-engine 5 类 **98.33%** test，Triaxial 7 类
 **77.38%** test（作者自存的同类结果是 83.28%，论文的 97.46% 对不上，见 `docs/06`）。
-Agent v1.1 已完成（逐记录缓存 + 3 次切分 + 5 seed）：工程目标全部达成，
-但**选型仍是负结果**——agent 0.9922 < random 0.9944 < fixed = exhaustive 0.9967（见 `docs/09`）。
-OOD 留一类验证也是负结果：未知类误接受率 53%（见 `docs/08`）。
-下一步：**v1.2 广度优先选择器**，并在 **Triaxial**（未饱和）上验证；aero 已经无法区分策略。
+Agent v1.1（3 次切分 + 5 seed）与 v1.2（预算按特征提取计）都已完成。
+v1.2 修好了记账：aero 8 个 unit 全付 → 四臂并列 0.9967（= oracle），test 100%；
+triaxial 只付 5/8 个 unit → agent = exhaustive = 0.8457，随机选方法掉到 0.8273。
+但 triaxial 上 **validation 88.1% 并没有换来更好的 test（仍是 77.38%）**，是 selection bias（见 `docs/10`）。
+OOD 留一类验证是负结果：未知类误接受率 53%（见 `docs/08`）。
+下一步：L2 可行性过滤 + 更大/可重复的 test 评估协议；L3 元学习要等数据集够（现有 2 个）。
 
 ---
 
@@ -107,7 +109,7 @@ src/entropy_agent/
   training/                   grouped split + generic training
   diagnosis/                  v4 artifact、runner、profile registry
   agent/                      v1.1 5 轮选型、逐记录缓存、多次切分、多 seed、SQLite 记忆
-tests/                        258 passed（231 旧 + 27 Agent v1.1）
+tests/                        262 passed（231 旧 + 31 Agent）
 ```
 
 ### 还没迁移/还没做
@@ -115,8 +117,9 @@ tests/                        258 passed（231 旧 + 27 Agent v1.1）
 - `experiments/`；
 - `continual/`；
 - `cli/`；
-- Agent v1.1（成本感知排序、家族内不确定性、冠军稳定性）；
-- Agent 在 Triaxial 上的验证。
+- Agent L2：数据画像驱动的可行性过滤（window 长度 vs `scale/m/tau`）；
+- Agent L3：跨数据集元学习（需要 ≥5 个数据集，现有 2 个）；
+- 可重复的 test 评估协议（现在 test 只有 60/84 条，±1 条 = 1.2–1.7 个点）。
 
 ### 测试
 
@@ -126,7 +129,7 @@ $env:PYTHONPATH="$PWD\src"
 python -m pytest tests -q --basetemp="$PWD\.pytest-tmp"
 ```
 
-当前结果：**258 passed**。
+当前结果：**262 passed**。
 
 在 DSH 的受限沙箱里跑不通：pytest 要创建/删除临时目录，会被沙箱拒绝（表现为
 大量 setup error + `sessionfinish` 的 `PermissionError`）。用「完全权限」跑即可。
@@ -332,22 +335,30 @@ src/entropy_agent/agent/
   loop.py         多 seed、多次切分、四臂、冠军、唯一一次 test、报告
 ```
 
-v1.1 已解决、v1.2 仍需处理的：见 §10。
+v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 
 先不要用 LLM 直接决定模型；LLM 只做候选排序/解释，所有执行走确定性 runner。
 
-### 第三步：在 Aero-engine 5 类上验证 Agent —— 已完成（负结果）
+### 第三步：在 Aero-engine 5 类上验证 Agent —— 已完成（结论见第 4 步）
 
 - Anchor：TSMEFuDE + BT-LSTSVM = 98.33% test；
 - v1：15 个 trial，val 98.33%，test 100%（只开一次），与随机臂持平；
 - v1.1：5 seed × 4 臂，agent 0.9922 < random 0.9944 < fixed = exhaustive 0.9967；
-- 结论：aero 已饱和，策略差异小于单 trial 波动，**不能**声称 Agent 更好；
-- 下一步：v1.2 广度优先选择器 → 在 Triaxial（77–83%）上验证，那里不同组合差 3–6 个点；
-- Triaxial 的 severity 上限只有 ~77–83%，不要拿 test 去调。
+- 结论：aero 已饱和，策略差异小于单 trial 波动，**不能**声称 Agent 更好。
 
-### 第四步：持续学习
+### 第四步：Agent v1.2 与 Triaxial 验证 —— 已完成
 
-等 5 轮 Agent 稳定后再做：
+- v1.2 把预算单位从 trial 换成特征提取（unit = 一次提取，买下该方法全部分类器）；
+- aero（8 unit 全付）：四臂并列 0.9967 = oracle，冠军 test 100%；
+- triaxial（只付 5/8 unit）：agent = fixed = exhaustive = 0.8457，random 0.8273
+  → “付哪几个方法”在 triaxial 上是真问题，随机会掉 1.8 个点；
+- **triaxial 冠军 validation 88.1% 但 test 仍是 77.38%**：selection bias，
+  不能拿 validation 的提升当成果；
+- 下一步：L2 可行性过滤 + 可重复 test 评估协议；L3 元学习等更多数据集。
+
+### 第五步：持续学习
+
+等 Agent 与评估协议稳定后再做：
 
 - 新批次接入；
 - 固定历史 train，不允许重新随机划分；
@@ -392,24 +403,26 @@ v1.1 已解决、v1.2 仍需处理的：见 §10。
 
 ```text
 1. 读 HANDOFF.md
-2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、docs/09（v1.1）
-3. 用「完全权限」跑 258 tests（受限沙箱会挡住 pytest 临时目录）
-4. 检查 anchor / agent-v1_1 / ood 的 results/ 是否还在
-5. 做 Agent v1.2（广度优先选择器），然后在 Triaxial 上验证
+2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、
+   docs/09（v1.1）、docs/10（v1.2）
+3. 用「完全权限」跑 262 tests（受限沙箱会挡住 pytest 临时目录）
+4. 检查 anchor / agent-v1_1 / agent-v1_2 / ood 的 results/ 是否还在
+5. 做 L2（可行性过滤）+ 可重复 test 评估协议，再谈 L3 元学习
 ```
 
 不要重新论证论文方法是否有效，也不要再重跑两个 anchor。  
-Aero-engine 98.33% + Triaxial 77.38% 已经证明主链路可用；Agent v1.1 证明闭环与缓存可运行；
-OOD 与 Agent 选型的负结果已经写进 `docs/08`、`docs/09`，不要把它们说成正向能力。
+Aero-engine 98.33% + Triaxial 77.38% 已经证明主链路可用；Agent v1.2 证明
+“按特征提取记账”能用 5/8 个 unit 达到穷举水平。  
+OOD、Agent 选型、selection bias 三个负结果已写进 `docs/08`–`docs/10`，
+不要把它们说成正向能力。
 
 ---
 
-## 10. Agent 已知缺陷（v1.2 的输入）
+## 10. Agent 已知缺陷（下一轮输入）
 
-1. **方法只测一次就锁死**：第 1 轮 RCMDE 报 0.9889，之后 9 个 trial 全给它和 IMFRDE，
-   真正能到 0.9967 的 `TSMEFuDE + SVM-RBF` / `RCMFuDE + LSTSVM` 从未被组合到。
-2. **深度优先用光预算**：15 个 trial 只覆盖 6 个方法，v1.2 应先“8 方法各 1 个分类器 = 8 次”，
-   再用剩余 7 次深化。
-3. **方法排序用均值而不是下置信界**：`mean − std` 会惩罚只测过一次的方法。
-4. **aero 已饱和**：大量组合落在 0.98–1.00，0.2 个百分点的差别小于单 trial 的 std，
-   策略好坏在这个数据集上无法分辨，必须换 Triaxial（77–83%）验证。
+1. **unit 选择仍靠先验**：付哪几个方法必须付了才知道好坏；预算 5/8 时永远有 3 个
+   方法无法评估，只有跨数据集历史（L3）才能给出先验。
+2. **selection bias 已被实测**：triaxial 冠军 validation 88.1%，test 仍 77.38%；
+   在 84 条 test 上 ±1 条 = 1.2 个点，任何小差异都不能下结论。
+3. **没有可行性过滤**：某些方法参数与窗口长度不匹配时仍会占掉一个 unit（L2）。
+4. **aero 已饱和**：0.9967 是天花板，继续在它上面调策略没有信息量。

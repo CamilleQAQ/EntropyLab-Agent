@@ -28,6 +28,16 @@ def main() -> int:
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--per-round", type=int, default=3)
     parser.add_argument(
+        "--units",
+        type=int,
+        default=None,
+        help=(
+            "v1.2 budget: how many entropy methods to pay a feature extraction "
+            "for; each paid unit evaluates all of its classifiers. Overrides "
+            "--rounds/--per-round."
+        ),
+    )
+    parser.add_argument(
         "--seeds",
         default="20261104",
         help="comma separated split seeds, for example 20261104,1,2,3,4",
@@ -57,6 +67,7 @@ def main() -> int:
         args.output,
         rounds=args.rounds,
         per_round=args.per_round,
+        units=args.units,
         seeds=seeds,
         validation_repeats=args.validation_repeats,
         arms=tuple(part.strip() for part in args.arms.split(",") if part.strip()),

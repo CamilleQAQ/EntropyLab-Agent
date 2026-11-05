@@ -345,6 +345,82 @@ def _exhaustive_arm(context: _Context, pool: Sequence[Candidate]) -> list[TrialR
     ]
 
 
+# --- v1.2: the expensive currency is a feature extraction, not a trial -------
+#
+# One extraction of an entropy method costs 40-350 s; fitting its remaining five
+# classifiers costs about half a second.  Counting "trials" made those two
+# resources look equal and pushed the selector into locking onto one method.  The
+# unit-based arms below count *method units*: one unit = one entropy method with
+# its parameters, and choosing a unit buys every classifier for that method.
+
+
+def _method_units(pool: Sequence[Candidate]) -> list[list[Candidate]]:
+    """Group the pool into method units, keeping pool order inside each unit."""
+    units: dict[tuple, list[Candidate]] = {}
+    for candidate in pool:
+        key = (candidate.method.method, tuple(sorted(candidate.method.parameters.items())))
+        units.setdefault(key, []).append(candidate)
+    return list(units.values())
+
+
+def _unit_order(
+    pool: Sequence[Candidate],
+    limit: int,
+    anchor_id: str | None,
+    *,
+    novelty: bool,
+) -> list[list[Candidate]]:
+    """Choose which method units to pay for.
+
+    ``novelty`` only moves the anchor unit to the front and then keeps the pool
+    order.  Nothing about a method can be measured without paying for its
+    extraction, so with a budget below the number of units there is no online
+    signal to rank them by.  An earlier draft preferred unvisited entropy
+    families and measurably picked worse methods on aero (it dropped MFuDE,
+    which shares a family with RCMFuDE), so the honest policy is the documented
+    order instead of a rule that only looks clever.
+    """
+    units = list(_method_units(pool))
+    if not novelty or anchor_id is None:
+        return units[:limit]
+    chosen: list[list[Candidate]] = []
+    for unit in units:
+        if any(candidate.candidate_id == anchor_id for candidate in unit):
+            chosen.append(unit)
+            break
+    for unit in units:
+        if len(chosen) >= limit:
+            break
+        if unit not in chosen:
+            chosen.append(unit)
+    return chosen[:limit]
+
+
+def _unit_arm(
+    context: _Context,
+    units: Sequence[Sequence[Candidate]],
+    *,
+    arm: str,
+    reason_prefix: str,
+) -> list[TrialResult]:
+    results: list[TrialResult] = []
+    index = 0
+    for unit in units:
+        for candidate in unit:
+            results.append(
+                _trial(
+                    context,
+                    candidate,
+                    arm=arm,
+                    trial_index=index,
+                    round_index=0,
+                    reason=f"{reason_prefix}: {candidate.method.method}",
+                )
+            )
+            index += 1
+    return results
+
+
 def _champion(results: Sequence[TrialResult]) -> TrialResult | None:
     scored = [
         result
@@ -472,7 +548,7 @@ def _write_report(
     model_id: str | None,
 ) -> None:
     lines: list[str] = []
-    lines.append("# Agent v1.1 运行报告")
+    lines.append("# Agent v1.2 运行报告" if budget.get("units") is not None else "# Agent v1.1 运行报告")
     lines.append("")
     lines.append(f"- run_id：`{run_id}`")
     lines.append(f"- 生成时间：{datetime.now(timezone.utc).isoformat()}")
@@ -480,9 +556,13 @@ def _write_report(
         f"- 数据集：`{profile.dataset_id}`（{profile.class_count} 类，窗口 {profile.window_size}）"
     )
     lines.append(
-        f"- 预算：{budget['rounds']} 轮 × {budget['per_round']} = "
-        f"{budget['rounds'] * budget['per_round']} 个 trial；"
-        f"seed 数 {budget['seeds']}；每 trial {budget['validation_repeats']} 次切分"
+        (
+            f"- 预算：{budget['units']} 个方法单元（unit = 一次特征提取，买下该方法的全部分类器）；"
+            if budget.get("units") is not None
+            else f"- 预算：{budget['rounds']} 轮 × {budget['per_round']} = "
+            f"{budget['rounds'] * budget['per_round']} 个 trial；"
+        )
+        + f"seed 数 {budget['seeds']}；每 trial {budget['validation_repeats']} 次切分"
     )
     lines.append("")
     lines.append("## 1. 数据概况")
@@ -521,7 +601,11 @@ def _write_report(
 
     primary = sorted(results_by_seed)[0]
     agent_results = results_by_seed[primary]["agent"]
-    lines.append(f"## 3. Agent 每轮选择（seed {primary}）")
+    lines.append(
+        f"## 3. Agent 的单元与分类器（seed {primary}）"
+        if budget.get("units") is not None
+        else f"## 3. Agent 每轮选择（seed {primary}）"
+    )
     lines.append("")
     lines.append("| 轮 | trial | 方法 | 分类器 | val Macro-F1 ± std | 提取记录 | 理由 |")
     lines.append("|---:|---:|---|---|---:|---:|---|")
@@ -610,6 +694,7 @@ def run_agent(
     *,
     rounds: int = 5,
     per_round: int = 3,
+    units: int | None = None,
     seeds: Sequence[int] = (20261104,),
     validation_repeats: int = 3,
     arms: Sequence[str] = ("agent", "random", "fixed", "exhaustive"),
@@ -620,7 +705,12 @@ def run_agent(
     run_test: bool = True,
     run_id: str | None = None,
 ) -> dict:
-    """Run the Agent and its same-budget controls across split seeds."""
+    """Run the Agent and its same-budget controls across split seeds.
+
+    ``units`` switches the budget to feature extractions (v1.2): one unit is one
+    entropy method with its parameters, and choosing a unit evaluates every
+    classifier for it.  Without ``units`` the legacy trial budget is used.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     pool = tuple(pool) if pool is not None else build_pool()
@@ -628,8 +718,16 @@ def run_agent(
     unknown = set(arms) - known_arms
     if unknown:
         raise ValueError(f"unknown arms: {sorted(unknown)}")
+    unit_mode = units is not None
     budget = rounds * per_round
-    if budget > len(pool):
+    if unit_mode:
+        if units < 1:
+            raise ValueError("units must be positive")
+        if units > len(_method_units(pool)):
+            raise ValueError(
+                f"units {units} exceeds the {len(_method_units(pool))} method units"
+            )
+    elif budget > len(pool):
         raise ValueError(f"budget {budget} exceeds the candidate pool size {len(pool)}")
     if validation_repeats < 1:
         raise ValueError("validation_repeats must be positive")
@@ -642,7 +740,7 @@ def run_agent(
     profile = build_profile(spec, records, resolve_dataset_split(spec, records))
 
     run_id = run_id or (
-        f"agent-v11-{spec.dataset_id.lower().replace('_', '-')}-"
+        f"agent-{'v12' if unit_mode else 'v11'}-{spec.dataset_id.lower().replace('_', '-')}-"
         f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     )
     memory = ExperimentMemory(memory_path or output_dir / "memory.sqlite")
@@ -656,8 +754,9 @@ def run_agent(
             spec.dataset_id,
             {"profile": profile.as_dict(), "pool_size": len(pool),
              "anchor": anchor.candidate_id if anchor else None},
-            {"rounds": rounds, "per_round": per_round, "pool_size": len(pool),
-             "arms": list(arms), "seeds": list(seeds),
+            {"rounds": rounds, "per_round": per_round, "units": units,
+             "mode": "units" if unit_mode else "rounds",
+             "pool_size": len(pool), "arms": list(arms), "seeds": list(seeds),
              "validation_repeats": validation_repeats},
         )
 
@@ -686,17 +785,55 @@ def run_agent(
                 splits=splits,
             )
             arms_results: dict[str, list[TrialResult]] = {}
-            if "agent" in arms:
-                arms_results["agent"] = _agent_arm(
-                    context, pool, rounds, per_round,
-                    anchor.candidate_id if anchor else None,
-                )
-            if "random" in arms:
-                arms_results["random"] = _random_arm(context, pool, budget, seed)
-            if "fixed" in arms:
-                arms_results["fixed"] = _fixed_arm(context, pool, budget)
-            if "exhaustive" in arms:
-                arms_results["exhaustive"] = _exhaustive_arm(context, pool)
+            if unit_mode:
+                if "agent" in arms:
+                    arms_results["agent"] = _unit_arm(
+                        context,
+                        _unit_order(
+                            pool,
+                            units,
+                            anchor.candidate_id if anchor else None,
+                            novelty=True,
+                        ),
+                        arm="agent",
+                        reason_prefix="paid unit (anchor first, then pool order)",
+                    )
+                if "fixed" in arms:
+                    arms_results["fixed"] = _unit_arm(
+                        context,
+                        _unit_order(pool, units, None, novelty=False),
+                        arm="fixed",
+                        reason_prefix="paid unit (fixed pool order)",
+                    )
+                if "random" in arms:
+                    generator = np.random.default_rng(seed)
+                    all_units = _method_units(pool)
+                    picked = generator.permutation(len(all_units))[:units]
+                    arms_results["random"] = _unit_arm(
+                        context,
+                        [all_units[int(position)] for position in picked],
+                        arm="random",
+                        reason_prefix="paid unit (random)",
+                    )
+                if "exhaustive" in arms:
+                    arms_results["exhaustive"] = _unit_arm(
+                        context,
+                        _method_units(pool),
+                        arm="exhaustive",
+                        reason_prefix="paid unit (exhaustive)",
+                    )
+            else:
+                if "agent" in arms:
+                    arms_results["agent"] = _agent_arm(
+                        context, pool, rounds, per_round,
+                        anchor.candidate_id if anchor else None,
+                    )
+                if "random" in arms:
+                    arms_results["random"] = _random_arm(context, pool, budget, seed)
+                if "fixed" in arms:
+                    arms_results["fixed"] = _fixed_arm(context, pool, budget)
+                if "exhaustive" in arms:
+                    arms_results["exhaustive"] = _exhaustive_arm(context, pool)
             results_by_seed[seed] = arms_results
 
         all_results = [
@@ -757,8 +894,9 @@ def run_agent(
             run_id=run_id,
             profile=profile,
             budget={
-                "rounds": rounds, "per_round": per_round, "pool_size": len(pool),
-                "seeds": len(seeds), "validation_repeats": validation_repeats,
+                "rounds": rounds, "per_round": per_round, "units": units,
+                "pool_size": len(pool), "seeds": len(seeds),
+                "validation_repeats": validation_repeats,
             },
             results_by_seed=results_by_seed,
             aggregate=aggregate,
@@ -772,8 +910,10 @@ def run_agent(
             "output_dir": str(output_dir),
             "profile": profile.as_dict(),
             "budget": {
-                "rounds": rounds, "per_round": per_round, "pool_size": len(pool),
-                "seeds": list(seeds), "validation_repeats": validation_repeats,
+                "rounds": rounds, "per_round": per_round, "units": units,
+                "mode": "units" if unit_mode else "rounds",
+                "pool_size": len(pool), "seeds": list(seeds),
+                "validation_repeats": validation_repeats,
             },
             "aggregate": aggregate,
             "champion": champion.candidate.describe() if champion is not None else None,
