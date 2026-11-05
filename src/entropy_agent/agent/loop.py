@@ -43,6 +43,7 @@ from ..training.pipeline import (
     train_dataset,
 )
 from .cache import FeatureCache
+from .cost import BudgetLedger, CostModel, save_cost_model
 from .candidates import Candidate, build_pool
 from .feasibility import check as feasibility_check
 from .memory import ExperimentMemory
@@ -404,9 +405,10 @@ def _unit_arm(
     *,
     arm: str,
     reason_prefix: str,
+    start_index: int = 0,
 ) -> list[TrialResult]:
     results: list[TrialResult] = []
-    index = 0
+    index = start_index
     for unit in units:
         for candidate in unit:
             results.append(
@@ -421,6 +423,79 @@ def _unit_arm(
             )
             index += 1
     return results
+
+
+def _cost_order(
+    units: Sequence[Sequence[Candidate]],
+    policy: str,
+    cost_model,
+    windows: int,
+    seed: int,
+    anchor_id: str | None,
+) -> list[list[Candidate]]:
+    """Order units for a seconds budget.
+
+    ``agent`` pays the paper anchor first when it fits, then goes cheapest-first:
+    under unknown value per method, spending the budget on breadth is the only
+    defensible greedy rule.  ``fixed`` keeps the pool order and ``random`` shuffles.
+    """
+    ordered = list(units)
+    if policy == "fixed":
+        return ordered
+    if policy == "random":
+        generator = np.random.default_rng(seed)
+        return [ordered[int(position)] for position in generator.permutation(len(ordered))]
+    anchor_unit = None
+    for unit in ordered:
+        if anchor_id is not None and any(
+            candidate.candidate_id == anchor_id for candidate in unit
+        ):
+            anchor_unit = unit
+            break
+    rest = [unit for unit in ordered if unit is not anchor_unit]
+    rest.sort(
+        key=lambda unit: (
+            cost_model.estimate(unit[0].method.method, windows),
+            ordered.index(unit),
+        )
+    )
+    return ([anchor_unit] if anchor_unit is not None else []) + rest
+
+
+def _cost_arm(
+    context: _Context,
+    pool: Sequence[Candidate],
+    *,
+    arm: str,
+    policy: str,
+    budget_seconds: float,
+    seed: int,
+    cost_model,
+    windows: int,
+    anchor_id: str | None,
+):
+    """Pay for units until the seconds budget is exhausted; return results and ledger."""
+    ledger = BudgetLedger(budget_seconds)
+    results: list[TrialResult] = []
+    units = _cost_order(_method_units(pool), policy, cost_model, windows, seed, anchor_id)
+    for unit in units:
+        method = unit[0].method.method
+        estimate = cost_model.estimate(method, windows)
+        if not ledger.can_afford(estimate):
+            ledger.skip(method, estimate, "does not fit the remaining budget")
+            continue
+        unit_results = _unit_arm(
+            context,
+            [unit],
+            arm=arm,
+            reason_prefix=f"paid {estimate:.1f}s estimated",
+            start_index=len(results),
+        )
+        actual = sum(result.extract_seconds for result in unit_results)
+        cost_model.observe(method, windows, actual)
+        ledger.charge(method, estimate)
+        results.extend(unit_results)
+    return results, ledger
 
 
 def _champion(results: Sequence[TrialResult]) -> TrialResult | None:
@@ -550,7 +625,12 @@ def _write_report(
     model_id: str | None,
 ) -> None:
     lines: list[str] = []
-    lines.append("# Agent v1.2 运行报告" if budget.get("units") is not None else "# Agent v1.1 运行报告")
+    if budget.get("budget_seconds") is not None:
+        lines.append("# Agent v1.4 运行报告（秒预算）")
+    elif budget.get("units") is not None:
+        lines.append("# Agent v1.2 运行报告")
+    else:
+        lines.append("# Agent v1.1 运行报告")
     lines.append("")
     lines.append(f"- run_id：`{run_id}`")
     lines.append(f"- 生成时间：{datetime.now(timezone.utc).isoformat()}")
@@ -559,7 +639,9 @@ def _write_report(
     )
     lines.append(
         (
-            f"- 预算：{budget['units']} 个方法单元（unit = 一次特征提取，买下该方法的全部分类器）；"
+            f"- 预算：{budget['budget_seconds']:.1f} 秒（按预估提取耗时计费，unit = 一个方法 + 其全部分类器）；"
+            if budget.get("budget_seconds") is not None
+            else f"- 预算：{budget['units']} 个方法单元（unit = 一次特征提取，买下该方法的全部分类器）；"
             if budget.get("units") is not None
             else f"- 预算：{budget['rounds']} 轮 × {budget['per_round']} = "
             f"{budget['rounds'] * budget['per_round']} 个 trial；"
@@ -593,6 +675,25 @@ def _write_report(
                 f"{entry['required_window']} | {entry['reason']} |"
             )
     lines.append("")
+
+    ledgers = budget.get("ledgers") or {}
+    if ledgers:
+        lines.append("## 1c. 秒预算账本（首个 seed）")
+        lines.append("")
+        lines.append("| 臂 | 预算 | 已花 | 剩余 | 买下的方法 |")
+        lines.append("|---|---:|---:|---:|---|")
+        for arm_name in ("agent", "fixed", "random"):
+            ledger = ledgers.get(arm_name)
+            if ledger is None:
+                continue
+            spent = ledger.spent_seconds if hasattr(ledger, "spent_seconds") else ledger["spent_seconds"]
+            remaining = ledger.remaining if hasattr(ledger, "remaining") else ledger["remaining_seconds"]
+            paid = ledger.paid_units if hasattr(ledger, "paid_units") else ledger["paid_units"]
+            lines.append(
+                f"| {arm_name} | {budget['budget_seconds']:.1f}s | {spent:.1f}s | "
+                f"{remaining:.1f}s | {', '.join(paid)} |"
+            )
+        lines.append("")
 
     lines.append("## 2. 各臂在多个 seed 上的表现（只看 validation）")
     lines.append("")
@@ -749,6 +850,8 @@ def run_agent(
     rounds: int = 5,
     per_round: int = 3,
     units: int | None = None,
+    budget_seconds: float | None = None,
+    cost_memory: Path | None = None,
     seeds: Sequence[int] = (20261104,),
     validation_repeats: int = 3,
     test_mode: str = "single",
@@ -804,8 +907,14 @@ def run_agent(
     if unknown:
         raise ValueError(f"unknown arms: {sorted(unknown)}")
     unit_mode = units is not None
+    cost_mode = budget_seconds is not None
+    if unit_mode and cost_mode:
+        raise ValueError("use either units or budget_seconds, not both")
     budget = rounds * per_round
-    if unit_mode:
+    if cost_mode:
+        if not budget_seconds > 0:
+            raise ValueError("budget_seconds must be positive")
+    elif unit_mode:
         if units < 1:
             raise ValueError("units must be positive")
         if units > len(_method_units(pool)):
@@ -825,15 +934,19 @@ def run_agent(
     records = load_dataset_records(spec, data_root)
     labels = np.asarray([record.label for record in records], dtype=np.int64)
     profile = build_profile(spec, records, resolve_dataset_split(spec, records))
+    windows_per_unit = len(records) * spec.window.windows_per_record
 
     run_id = run_id or (
-        f"agent-{'v12' if unit_mode else 'v11'}-{spec.dataset_id.lower().replace('_', '-')}-"
+        f"agent-{'v14' if cost_mode else 'v12' if unit_mode else 'v11'}-"
+        f"{spec.dataset_id.lower().replace('_', '-')}-"
         f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     )
     memory = ExperimentMemory(memory_path or output_dir / "memory.sqlite")
     cache = FeatureCache(
         Path(cache_root) if cache_root is not None else output_dir / "feature_cache"
     )
+    cost_model = CostModel.from_memory(cost_memory) if cost_mode else CostModel()
+    cost_ledgers: dict[int, dict[str, BudgetLedger]] = {}
     anchor = anchor_candidate(pool)
     try:
         memory.start_run(
@@ -873,7 +986,38 @@ def run_agent(
                 splits=splits,
             )
             arms_results: dict[str, list[TrialResult]] = {}
-            if unit_mode:
+            if cost_mode:
+                for arm_name, policy in (
+                    ("agent", "agent"),
+                    ("fixed", "fixed"),
+                    ("random", "random"),
+                ):
+                    if arm_name not in arms:
+                        continue
+                    # Every arm starts from the same price book; observed prices
+                    # update it inside the arm so later units are priced better.
+                    arm_model = CostModel(per_window=dict(cost_model.per_window))
+                    results, ledger = _cost_arm(
+                        context,
+                        pool,
+                        arm=arm_name,
+                        policy=policy,
+                        budget_seconds=budget_seconds,
+                        seed=seed,
+                        cost_model=arm_model,
+                        windows=windows_per_unit,
+                        anchor_id=anchor.candidate_id if anchor else None,
+                    )
+                    arms_results[arm_name] = results
+                    cost_ledgers.setdefault(seed, {})[arm_name] = ledger
+                if "exhaustive" in arms:
+                    arms_results["exhaustive"] = _unit_arm(
+                        context,
+                        _method_units(pool),
+                        arm="exhaustive",
+                        reason_prefix="budget ignored (reference)",
+                    )
+            elif unit_mode:
                 if "agent" in arms:
                     arms_results["agent"] = _unit_arm(
                         context,
@@ -932,6 +1076,16 @@ def run_agent(
         ]
         _write_trials_csv(output_dir / "trials.csv", all_results)
         aggregate = _aggregate_seeds(results_by_seed)
+        if cost_mode:
+            save_cost_model(
+                output_dir / "cost_model.json",
+                cost_model,
+                {
+                    f"seed-{seed}/{arm}": ledger
+                    for seed, arms in cost_ledgers.items()
+                    for arm, ledger in arms.items()
+                },
+            )
 
         champion = _champion(
             [
@@ -1039,9 +1193,11 @@ def run_agent(
             profile=profile,
             budget={
                 "rounds": rounds, "per_round": per_round, "units": units,
+                "budget_seconds": budget_seconds,
                 "pool_size": len(pool), "seeds": len(seeds),
                 "validation_repeats": validation_repeats,
                 "test_mode": test_mode, "skipped": skipped_candidates,
+                "ledgers": cost_ledgers.get(sorted(seeds)[0], {}),
             },
             results_by_seed=results_by_seed,
             aggregate=aggregate,
@@ -1056,11 +1212,18 @@ def run_agent(
             "profile": profile.as_dict(),
             "budget": {
                 "rounds": rounds, "per_round": per_round, "units": units,
-                "mode": "units" if unit_mode else "rounds",
+                "budget_seconds": budget_seconds,
+                "mode": "seconds" if cost_mode else "units" if unit_mode else "rounds",
                 "pool_size": len(pool), "seeds": list(seeds),
                 "validation_repeats": validation_repeats,
             },
             "aggregate": aggregate,
+            "ledgers": {
+                str(seed): {
+                    arm: ledger.as_dict() for arm, ledger in arms.items()
+                }
+                for seed, arms in cost_ledgers.items()
+            },
             "champion": champion.candidate.describe() if champion is not None else None,
             "champion_seed": champion.seed if champion is not None else None,
             "champion_validation": (

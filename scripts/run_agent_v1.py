@@ -38,6 +38,21 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--budget-seconds",
+        type=float,
+        default=None,
+        help=(
+            "v1.4 budget: total estimated feature-extraction seconds. One unit "
+            "costs its estimated price and buys all classifiers of that method."
+        ),
+    )
+    parser.add_argument(
+        "--cost-memory",
+        type=Path,
+        default=None,
+        help="experiment memory file used to seed the per-window cost model",
+    )
+    parser.add_argument(
         "--seeds",
         default="20261104",
         help="comma separated split seeds, for example 20261104,1,2,3,4",
@@ -78,6 +93,8 @@ def main() -> int:
         rounds=args.rounds,
         per_round=args.per_round,
         units=args.units,
+        budget_seconds=args.budget_seconds,
+        cost_memory=args.cost_memory,
         seeds=seeds,
         validation_repeats=args.validation_repeats,
         test_mode=args.test_mode,
