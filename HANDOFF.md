@@ -33,7 +33,9 @@ anchor 文档里的单切分数字（aero 98.33%、triaxial 77.38%、gear 53.03%
 但**它们只是某一次切分**；5 折均值才是该写的数字。
 
 OOD 留一类验证是负结果：未知类误接受率 53%（见 `docs/08`）。
-下一个有信息量的方向：通道选择 / 第 4-5 个数据集（L3 需要 ≥5）/ `cli/`。
+**CLI 与诊断入口已打通**（`docs/15`）：`entropylab agent run / train / models / diagnose /
+diagnose-batch / inspect`，真实冠军已注册，5 条真实信号 5/5 诊断正确。
+下一个有信息量的方向：可视化 / 通道选择 / 第 4-5 个数据集（L3 需要 ≥5）/ 持续学习。
 
 ---
 
@@ -125,17 +127,17 @@ src/entropy_agent/
   training/                   grouped split + generic training
   diagnosis/                  v4 artifact、runner、profile registry
   agent/                      v1.4 选型：8 熵 + 5 融合族、逐记录缓存、秒预算、多 seed
-tests/                        281 passed（231 旧 + 50 Agent/评估协议）
+  cli/                        统一入口：agent run / train / models / diagnose / inspect
+tests/                        289 passed（231 旧 + 58 Agent/评估协议/CLI）
 ```
 
 ### 还没迁移/还没做
 
-- `experiments/`；
-- `continual/`；
-- `cli/`；
-- Agent L2：数据画像驱动的可行性过滤（window 长度 vs `scale/m/tau`）；
-- Agent L3：跨数据集元学习（需要 ≥5 个数据集，现有 2 个）；
-- 可重复的 test 评估协议（现在 test 只有 60/84 条，±1 条 = 1.2–1.7 个点）。
+- `continual/`（持续学习：新批次、champion/challenger、replay、rollback）；
+- 可视化（特征随尺度曲线、混淆矩阵、预算-性能曲线；全仓库 0 行 matplotlib）；
+- 数据集 catalog（现在 spec 仍要手传路径，不能按元数据选择）；
+- Agent L3：跨数据集元学习（需要 ≥5 个数据集，现有 3 个）；
+- `experiments/`：**不做**（用户 2026-11-05 明确放弃论文全表复现）。
 
 ### 测试
 
@@ -145,7 +147,7 @@ $env:PYTHONPATH="$PWD\src"
 python -m pytest tests -q --basetemp="$PWD\.pytest-tmp"
 ```
 
-当前结果：**281 passed**。
+当前结果：**289 passed**。
 
 在 DSH 的受限沙箱里跑不通：pytest 要创建/删除临时目录，会被沙箱拒绝（表现为
 大量 setup error + `sessionfinish` 的 `PermissionError`）。用「完全权限」跑即可。
@@ -377,6 +379,23 @@ triaxial 的 93.6% 不能当成“超过论文”（协议不同）。
 买下它之后只剩 0.6 秒、后面 11 个方法全部跳过；agent 先买便宜的 10 个 unit，
 37.6 秒就追平穷举。aero/gear 上三条臂打平（分别饱和 / 噪声大）。
 
+### CLI 与诊断入口（`docs/15`）
+
+统一入口 `entropylab`（`pyproject.toml` 的 `[project.scripts]`，也可 `python -m entropy_agent.cli`）：
+
+```text
+agent run / train / models list|register|show|delete / diagnose / diagnose-batch / inspect
+```
+
+- 训练核心抽到 `training/experiment.py::run_supervised_experiment()`，
+  `scripts/run_supervised_experiment.py` 改成薄封装，两条入口不会再漂移；
+- 诊断有两条路径：`--artifact` 直接加载，或 `--registry + --profile` 走
+  `ModelRegistry.as_diagnosis_registry()` → `DiagnosisRegistry.match()`；
+- **元数据必须显式**：采样率不符 → `INCOMPATIBLE`；缺 `signal_type` → `INCOMPLETE`
+  并列出缺项。绝不从信号推断；
+- 端到端演示：注册两个 v1.4 真实冠军，5 条真实 aero 信号 5/5 诊断正确；
+- 诚实限制：注册表只保证元数据契约，**不保证信号属于该设备**（那属于 OOD，而 OOD 不可靠）。
+
 
 ### 作废结果，不要再引用
 
@@ -504,10 +523,10 @@ v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 1. 读 HANDOFF.md
 2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、
    docs/09（v1.1）、docs/10（v1.2）、docs/11（L2 + test 协议）、docs/12（齿轮数据集）、
-   docs/13（融合族候选池）
-3. 用「完全权限」跑 281 tests（受限沙箱会挡住 pytest 临时目录）
+   docs/13（融合族）、docs/14（秒预算）、docs/15（CLI + 诊断入口）
+3. 用「完全权限」跑 289 tests（受限沙箱会挡住 pytest 临时目录）
 4. 检查 anchor / agent / ood 的 results/ 是否还在（三个数据集都有）
-5. 成本加权 unit 预算 / 通道选择 / 第 4-5 个数据集；L3 要等数据集 ≥5 个
+5. 可视化 / 通道选择 / 第 4-5 个数据集；持续学习最后做
 ```
 
 不要重新论证论文方法是否有效，也不要再重跑两个 anchor。  
@@ -526,6 +545,9 @@ OOD、Agent 贪心选型、单切分高估这些负结果写在 `docs/08`–`doc
 3. **成本模型是估计值**：先验来自本仓库 1892–2000 点窗口，换窗口长度或方法参数要重新校准；
    预算按预估秒数计费，预估偏差会直接变成“买贵/买便宜”。
 4. **通道是写死的**：齿轮 9 个振动通道里 ch7 比 ch0 高 11 个点，通道还没进入候选维度。
-5. **`cli/` 仍然缺失**：所有能力只能通过 scripts 调用，没有统一入口。
-6. **aero 已饱和**：validation 五折全 1.0，继续在它上面调策略没有信息量；
+5. **CLI 只保证元数据契约，不保证信号属于该设备**：把 aero 信号按 gear 的 profile 输入
+   照样会给出 `SPALLING`；真正的“不属于任何已知类别”要靠 OOD，而 OOD 已实测不可靠
+   （`docs/08`）。不要把 CLI 当安全门。
+6. **没有可视化**：论文/简历需要的特征曲线、混淆矩阵图、预算-性能曲线都还没有（0 行 matplotlib）。
+7. **aero 已饱和**：validation 五折全 1.0，继续在它上面调策略没有信息量；
    策略对比要用 triaxial（中等）和 gear（难，方差大）。

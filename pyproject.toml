@@ -25,6 +25,9 @@ ml = ["scikit-learn", "joblib"]
 torch = ["torch>=2.14"]
 test = ["pytest"]
 
+[project.scripts]
+entropylab = "entropy_agent.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
