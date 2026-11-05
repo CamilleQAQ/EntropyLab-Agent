@@ -250,3 +250,65 @@ def test_units_above_the_pool_size_is_rejected(tiny_dataset, tmp_path: Path) -> 
         assert "units" in str(error)
     else:  # pragma: no cover
         raise AssertionError("units above the pool size must be rejected")
+
+
+# --- repeatable test evaluation ---------------------------------------------
+
+
+def test_per_seed_test_mode_scores_each_seed_on_its_own_test(
+    tiny_dataset, tmp_path: Path
+) -> None:
+    spec, root = tiny_dataset
+    output = tmp_path / "per-seed-test"
+    summary = run_agent(
+        spec,
+        root,
+        output,
+        rounds=1,
+        per_round=2,
+        seeds=(7, 8),
+        validation_repeats=1,
+        test_mode="per-seed",
+        arms=("agent",),
+        pool=_pool(),
+        run_id="tiny-per-seed",
+    )
+
+    assert summary["test"]["mode"] == "per-seed"
+    assert summary["test"]["seeds"] == 2
+    assert set(summary["test"]["per_seed"]) == {"7", "8"}
+    assert 0.0 <= summary["test"]["mean_accuracy"] <= 1.0
+    assert summary["test"]["std_accuracy"] >= 0.0
+    assert (output / "champion_model" / "seed-7" / "config.json").is_file()
+    assert (output / "champion_model" / "seed-8" / "config.json").is_file()
+
+    report = (output / "report.md").read_text(encoding="utf-8")
+    assert "test 均值" in report
+
+
+def test_single_test_mode_reports_a_bootstrap_interval(
+    tiny_dataset, tmp_path: Path
+) -> None:
+    spec, root = tiny_dataset
+    output = tmp_path / "single-test"
+    summary = run_agent(
+        spec,
+        root,
+        output,
+        rounds=1,
+        per_round=2,
+        seeds=(7,),
+        validation_repeats=1,
+        test_mode="single",
+        arms=("agent",),
+        pool=_pool(),
+        run_id="tiny-single",
+    )
+
+    bootstrap = summary["test"]["bootstrap"]
+    assert bootstrap is not None
+    observed = summary["test"]["test"]["multiclass_accuracy"]
+    assert bootstrap["accuracy"]["low"] <= observed <= bootstrap["accuracy"]["high"]
+    assert bootstrap["macro_f1"]["low"] <= bootstrap["macro_f1"]["high"]
+    report = (output / "report.md").read_text(encoding="utf-8")
+    assert "bootstrap" in report

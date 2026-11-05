@@ -34,6 +34,7 @@ from ..io.dataset import (
     load_dataset_records,
     resolve_dataset_split,
 )
+from ..training.grouped import bootstrap_metric_ci
 from ..training.pipeline import (
     PreparedDataset,
     evaluate_partition,
@@ -43,6 +44,7 @@ from ..training.pipeline import (
 )
 from .cache import FeatureCache
 from .candidates import Candidate, build_pool
+from .feasibility import check as feasibility_check
 from .memory import ExperimentMemory
 from .profile import DataProfile, build_profile
 from .selector import anchor_candidate, propose
@@ -572,6 +574,24 @@ def _write_report(
     lines.append(f"| 类别 | {', '.join(profile.class_names)} |")
     lines.append(f"| 分区记录数 | {profile.records_per_split} |")
     lines.append(f"| 组数 | {profile.group_count} |")
+    lines.append(f"| 窗长 / 每记录窗口数 | {profile.window_size} / {profile.windows_per_record} |")
+    lines.append("")
+
+    skipped = budget.get("skipped") or []
+    lines.append("## 1b. 可行性过滤（L2）")
+    lines.append("")
+    if not skipped:
+        lines.append(
+            f"无：{budget['pool_size']} 个候选的参数全部能放进 window {profile.window_size}。"
+        )
+    else:
+        lines.append("| 方法 | 分类器 | 需要窗长 | 原因 |")
+        lines.append("|---|---|---:|---|")
+        for entry in skipped:
+            lines.append(
+                f"| {entry['method']} | {entry['classifier']} | "
+                f"{entry['required_window']} | {entry['reason']} |"
+            )
     lines.append("")
 
     lines.append("## 2. 各臂在多个 seed 上的表现（只看 validation）")
@@ -636,10 +656,33 @@ def _write_report(
             )
         lines.append("")
 
-    lines.append("## 5. 冠军与唯一一次 test")
+    lines.append("## 5. 冠军与 test 评估")
     lines.append("")
+    mode = (test_metrics or {}).get("mode", "single")
     if champion is None or test_metrics is None:
         lines.append("没有可用冠军（全部 trial 失败）。")
+    elif mode == "per-seed":
+        lines.append("每个 seed 是一次独立实验：在该 seed 的 validation 上选冠军，"
+                     "再在该 seed 的 test 上评一次。同一分区不会被评两次。")
+        lines.append("")
+        lines.append("| seed | 冠军 | val Accuracy | test Accuracy | test Macro-F1 |")
+        lines.append("|---:|---|---:|---:|---:|")
+        for seed_value, entry in sorted(
+            test_metrics["per_seed"].items(), key=lambda item: int(item[0])
+        ):
+            lines.append(
+                f"| {seed_value} | {entry['candidate']} | "
+                f"{_fmt(entry['validation']['multiclass_accuracy'])} | "
+                f"{_fmt(entry['test']['multiclass_accuracy'])} | "
+                f"{_fmt(entry['test']['multiclass_macro_f1'])} |"
+            )
+        lines.append("")
+        lines.append(
+            f"- test 均值：accuracy = {_fmt(test_metrics['mean_accuracy'])} ± "
+            f"{_fmt(test_metrics['std_accuracy'])}；"
+            f"macro-F1 = {_fmt(test_metrics['mean_macro_f1'])} ± "
+            f"{_fmt(test_metrics['std_macro_f1'])}（{test_metrics['seeds']} 个 seed）"
+        )
     else:
         lines.append(f"- 冠军：`{champion.candidate.label}`（seed {champion.seed}，"
                      f"第 {champion.round_index} 轮，trial {champion.trial_index}）")
@@ -659,6 +702,17 @@ def _write_report(
             lines.append(
                 f"| {name} | {_fmt(metrics['multiclass_accuracy'])} | "
                 f"{_fmt(metrics['multiclass_macro_f1'])} |"
+            )
+        bootstrap = test_metrics.get("bootstrap")
+        if bootstrap:
+            lines.append("")
+            lines.append(
+                f"- test 的 {int(bootstrap['confidence'] * 100)}% bootstrap 区间"
+                f"（{bootstrap['rows']} 条记录，{bootstrap['iterations']} 次重采样）："
+                f"accuracy [{_fmt(bootstrap['accuracy']['low'])} , "
+                f"{_fmt(bootstrap['accuracy']['high'])}]，"
+                f"macro-F1 [{_fmt(bootstrap['macro_f1']['low'])} , "
+                f"{_fmt(bootstrap['macro_f1']['high'])}]"
             )
         lines.append("")
         lines.append("test 只在上述冠军上计算一次；其余臂与其余 seed 只报告 validation。")
@@ -697,6 +751,7 @@ def run_agent(
     units: int | None = None,
     seeds: Sequence[int] = (20261104,),
     validation_repeats: int = 3,
+    test_mode: str = "single",
     arms: Sequence[str] = ("agent", "random", "fixed", "exhaustive"),
     pool: Sequence[Candidate] | None = None,
     cache_root: Path | None = None,
@@ -714,6 +769,36 @@ def run_agent(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     pool = tuple(pool) if pool is not None else build_pool()
+    # L2: drop candidates whose parameters cannot fit the declared window before
+    # paying for an extraction.  This is a guard, not an optimisation: with the
+    # default parameter sets and our datasets nothing is dropped.
+    feasible_pool: list[Candidate] = []
+    skipped_candidates: list[dict] = []
+    for candidate in pool:
+        verdict = feasibility_check(
+            candidate.method.method,
+            candidate.method.parameters,
+            spec.window.size,
+        )
+        if verdict.feasible:
+            feasible_pool.append(candidate)
+        else:
+            skipped_candidates.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "method": candidate.method.method,
+                    "classifier": candidate.classifier.algorithm,
+                    "required_window": verdict.required_window,
+                    "reason": verdict.reason,
+                }
+            )
+    if not feasible_pool:
+        raise ValueError(
+            "no candidate is feasible for window "
+            f"{spec.window.size}: every method needs a longer window"
+        )
+    pool = tuple(feasible_pool)
+
     known_arms = {"agent", "random", "fixed", "exhaustive"}
     unknown = set(arms) - known_arms
     if unknown:
@@ -731,6 +816,8 @@ def run_agent(
         raise ValueError(f"budget {budget} exceeds the candidate pool size {len(pool)}")
     if validation_repeats < 1:
         raise ValueError("validation_repeats must be positive")
+    if test_mode not in {"single", "per-seed"}:
+        raise ValueError("test_mode must be 'single' or 'per-seed'")
     seeds = tuple(int(seed) for seed in seeds)
     if not seeds:
         raise ValueError("at least one seed is required")
@@ -757,7 +844,8 @@ def run_agent(
             {"rounds": rounds, "per_round": per_round, "units": units,
              "mode": "units" if unit_mode else "rounds",
              "pool_size": len(pool), "arms": list(arms), "seeds": list(seeds),
-             "validation_repeats": validation_repeats},
+             "validation_repeats": validation_repeats, "test_mode": test_mode,
+             "skipped_candidates": skipped_candidates},
         )
 
         # Features are extracted lazily per entropy method and cached per record,
@@ -858,8 +946,9 @@ def run_agent(
             model_id
             or (champion_model_id(spec, champion.candidate) if champion is not None else None)
         )
-        if run_test and champion is not None:
-            test_context = _Context(
+
+        def _seed_test_context(seed_value: int) -> _Context:
+            return _Context(
                 spec=spec,
                 data_root=Path(data_root),
                 records=records,
@@ -867,13 +956,13 @@ def run_agent(
                 cache=cache,
                 memory=memory,
                 run_id=run_id,
-                seed=champion.seed,
+                seed=seed_value,
                 splits=[
                     resolve_dataset_split(
                         spec.model_copy(
                             update={
                                 "split": spec.split.model_copy(
-                                    update={"seed": champion.seed}
+                                    update={"seed": seed_value}
                                 )
                             }
                         ),
@@ -881,9 +970,64 @@ def run_agent(
                     )
                 ],
             )
-            test_metrics = _evaluate_champion(
+
+        if run_test and test_mode == "per-seed":
+            # Each seed is an independent experiment: select on that seed's
+            # validation, then evaluate that seed's champion on that seed's test
+            # partition.  No partition is scored twice.
+            per_seed_test: dict[str, dict] = {}
+            for seed_value, arms_results in results_by_seed.items():
+                seed_champion = _champion(arms_results.get("agent", []))
+                if seed_champion is None:
+                    continue
+                seed_model_id = f"{resolved_model_id}-seed-{seed_value}"
+                metrics = _evaluate_champion(
+                    _seed_test_context(seed_value),
+                    seed_champion,
+                    model_directory / f"seed-{seed_value}",
+                    seed_model_id,
+                )
+                per_seed_test[str(seed_value)] = {
+                    "candidate": seed_champion.candidate.label,
+                    "model_id": seed_model_id,
+                    "validation": metrics["validation"],
+                    "test": metrics["test"],
+                }
+            if per_seed_test:
+                accuracies = [
+                    entry["test"]["multiclass_accuracy"] for entry in per_seed_test.values()
+                ]
+                macro_f1 = [
+                    entry["test"]["multiclass_macro_f1"] for entry in per_seed_test.values()
+                ]
+                test_metrics = {
+                    "mode": "per-seed",
+                    "per_seed": per_seed_test,
+                    "mean_accuracy": float(np.mean(accuracies)),
+                    "std_accuracy": float(np.std(accuracies)),
+                    "mean_macro_f1": float(np.mean(macro_f1)),
+                    "std_macro_f1": float(np.std(macro_f1)),
+                    "seeds": len(per_seed_test),
+                }
+        elif run_test and champion is not None:
+            test_context = _seed_test_context(champion.seed)
+            raw_metrics = _evaluate_champion(
                 test_context, champion, model_directory, resolved_model_id
             )
+            bootstrap = None
+            predictions = raw_metrics.get("test_predictions") or []
+            if predictions:
+                truth = np.asarray([item["truth"] for item in predictions], dtype=np.int64)
+                predicted = np.asarray(
+                    [item["predicted"] for item in predictions], dtype=np.int64
+                )
+                bootstrap = bootstrap_metric_ci(
+                    truth,
+                    predicted,
+                    class_count=len(spec.labels.names),
+                    seed=champion.seed,
+                )
+            test_metrics = {**raw_metrics, "mode": "single", "bootstrap": bootstrap}
         memory.finish_run(
             run_id,
             champion.candidate.describe() if champion is not None else None,
@@ -897,6 +1041,7 @@ def run_agent(
                 "rounds": rounds, "per_round": per_round, "units": units,
                 "pool_size": len(pool), "seeds": len(seeds),
                 "validation_repeats": validation_repeats,
+                "test_mode": test_mode, "skipped": skipped_candidates,
             },
             results_by_seed=results_by_seed,
             aggregate=aggregate,

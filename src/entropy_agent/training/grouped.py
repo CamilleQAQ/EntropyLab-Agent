@@ -171,6 +171,68 @@ def classification_metrics(
     return result
 
 
+def bootstrap_metric_ci(
+    truth: np.ndarray,
+    predicted: np.ndarray,
+    *,
+    class_count: int,
+    iterations: int = 2000,
+    seed: int = 0,
+    confidence: float = 0.95,
+) -> dict:
+    """Percentile bootstrap for accuracy and macro-F1 on one fixed prediction set.
+
+    A held-out partition of a few dozen records cannot resolve a difference of one
+    or two records; this reports the interval those records actually support.
+    """
+    truth = np.asarray(truth, dtype=np.int64)
+    predicted = np.asarray(predicted, dtype=np.int64)
+    if truth.shape != predicted.shape or truth.ndim != 1:
+        raise ValueError("truth and predicted must be parallel 1-D arrays")
+    if truth.size == 0:
+        raise ValueError("bootstrap requires at least one prediction")
+    if iterations < 1:
+        raise ValueError("iterations must be positive")
+    if not 0 < confidence < 1:
+        raise ValueError("confidence must be between zero and one")
+    metrics = _sklearn_metrics()
+    generator = np.random.default_rng(seed)
+    accuracies: list[float] = []
+    macro_f1: list[float] = []
+    for _ in range(iterations):
+        sample = generator.integers(0, truth.size, truth.size)
+        resampled_truth = truth[sample]
+        resampled_predicted = predicted[sample]
+        accuracies.append(
+            float(metrics.accuracy_score(resampled_truth, resampled_predicted))
+        )
+        macro_f1.append(
+            float(
+                metrics.f1_score(
+                    resampled_truth,
+                    resampled_predicted,
+                    labels=range(class_count),
+                    average="macro",
+                    zero_division=0,
+                )
+            )
+        )
+    tail = (1.0 - confidence) / 2.0
+    return {
+        "iterations": int(iterations),
+        "confidence": float(confidence),
+        "rows": int(truth.size),
+        "accuracy": {
+            "low": float(np.quantile(accuracies, tail)),
+            "high": float(np.quantile(accuracies, 1.0 - tail)),
+        },
+        "macro_f1": {
+            "low": float(np.quantile(macro_f1, tail)),
+            "high": float(np.quantile(macro_f1, 1.0 - tail)),
+        },
+    }
+
+
 def evaluate_channel_candidates(
     features: np.ndarray,
     labels: np.ndarray,

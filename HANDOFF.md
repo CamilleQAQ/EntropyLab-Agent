@@ -10,14 +10,22 @@
 
 ## 0. 一句话现状
 
-两个 anchor 都已完成并冻结：Aero-engine 5 类 **98.33%** test，Triaxial 7 类
-**77.38%** test（作者自存的同类结果是 83.28%，论文的 97.46% 对不上，见 `docs/06`）。
-Agent v1.1（3 次切分 + 5 seed）与 v1.2（预算按特征提取计）都已完成。
-v1.2 修好了记账：aero 8 个 unit 全付 → 四臂并列 0.9967（= oracle），test 100%；
-triaxial 只付 5/8 个 unit → agent = exhaustive = 0.8457，随机选方法掉到 0.8273。
-但 triaxial 上 **validation 88.1% 并没有换来更好的 test（仍是 77.38%）**，是 selection bias（见 `docs/10`）。
+两个 anchor 都已完成并冻结：Aero-engine 5 类、Triaxial 7 类。
+Agent v1.1（3 次切分 + 5 seed）与 v1.2（预算按特征提取计）都已完成，
+L2 可行性过滤与可重复 test 协议也已落地（`docs/11`）。
+
+**现在的数字（5 个独立切分，每折独立选型 + 独立 test）**：
+
+| 数据集 | test accuracy | 说明 |
+|---|---:|---|
+| aero 5 状态 | **98.0% ± 1.6%** | 单切分曾报 100%，那是上沿 |
+| triaxial 7 状态 | **82.6% ± 2.9%** | 单切分曾报 77.38%，那是下沿 |
+
+注意：两个 anchor 文档里的单切分数字（aero 98.33%、triaxial 77.38%）仍然有效，
+但**它们只是某一次切分**；5 折均值才是这两个数据集该写的数字。
+
 OOD 留一类验证是负结果：未知类误接受率 53%（见 `docs/08`）。
-下一步：L2 可行性过滤 + 更大/可重复的 test 评估协议；L3 元学习要等数据集够（现有 2 个）。
+下一步：L3 元学习要等数据集够（现有 2 个）；否则先补 `cli/` 与持续学习。
 
 ---
 
@@ -109,7 +117,7 @@ src/entropy_agent/
   training/                   grouped split + generic training
   diagnosis/                  v4 artifact、runner、profile registry
   agent/                      v1.1 5 轮选型、逐记录缓存、多次切分、多 seed、SQLite 记忆
-tests/                        262 passed（231 旧 + 31 Agent）
+tests/                        270 passed（231 旧 + 39 Agent/评估协议）
 ```
 
 ### 还没迁移/还没做
@@ -129,7 +137,7 @@ $env:PYTHONPATH="$PWD\src"
 python -m pytest tests -q --basetemp="$PWD\.pytest-tmp"
 ```
 
-当前结果：**262 passed**。
+当前结果：**270 passed**。
 
 在 DSH 的受限沙箱里跑不通：pytest 要创建/删除临时目录，会被沙箱拒绝（表现为
 大量 setup error + `sessionfinish` 的 `PermissionError`）。用「完全权限」跑即可。
@@ -352,11 +360,19 @@ v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 - aero（8 unit 全付）：四臂并列 0.9967 = oracle，冠军 test 100%；
 - triaxial（只付 5/8 unit）：agent = fixed = exhaustive = 0.8457，random 0.8273
   → “付哪几个方法”在 triaxial 上是真问题，随机会掉 1.8 个点；
-- **triaxial 冠军 validation 88.1% 但 test 仍是 77.38%**：selection bias，
-  不能拿 validation 的提升当成果；
-- 下一步：L2 可行性过滤 + 可重复 test 评估协议；L3 元学习等更多数据集。
+- **triaxial 冠军 validation 88.1% 但单切分 test 77.38%**：当时判为 selection bias；
+  5 折重跑后修正为 val ≈ 84.1%、test ≈ 82.6%，真实差距约 1.4 个点（见 `docs/11`）。
 
-### 第五步：持续学习
+### 第五步：L2 可行性过滤 + 可重复 test 协议 —— 已完成
+
+- `agent/feasibility.py`：`window >= scale x ((m-1)*tau+1)`，在预算检查前过滤候选池，
+  跳过的候选写进 `budget.skipped_candidates` 与报告 §1b（现有两个数据集 0 跳过，是守卫）；
+- `--test-mode per-seed`：每个 seed 独立选型 + 独立 test，报 mean ± std；
+- `single` 模式加 bootstrap 区间（2000 次重采样，95%）；
+- **修正后的数字**：aero test 98.0% ± 1.6%，triaxial test 82.6% ± 2.9%；
+- 结论：单切分的 ±1 条记录会改变结论方向，之前 77.38% / 100% 都只是单次切分的端点。
+
+### 第六步：持续学习
 
 等 Agent 与评估协议稳定后再做：
 
@@ -404,10 +420,10 @@ v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 ```text
 1. 读 HANDOFF.md
 2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、
-   docs/09（v1.1）、docs/10（v1.2）
-3. 用「完全权限」跑 262 tests（受限沙箱会挡住 pytest 临时目录）
+   docs/09（v1.1）、docs/10（v1.2）、docs/11（L2 + test 协议）
+3. 用「完全权限」跑 270 tests（受限沙箱会挡住 pytest 临时目录）
 4. 检查 anchor / agent-v1_1 / agent-v1_2 / ood 的 results/ 是否还在
-5. 做 L2（可行性过滤）+ 可重复 test 评估协议，再谈 L3 元学习
+5. 补 cli/，或接第 3 个数据集；L3 元学习要等数据集 ≥5 个
 ```
 
 不要重新论证论文方法是否有效，也不要再重跑两个 anchor。  
@@ -422,7 +438,8 @@ OOD、Agent 选型、selection bias 三个负结果已写进 `docs/08`–`docs/1
 
 1. **unit 选择仍靠先验**：付哪几个方法必须付了才知道好坏；预算 5/8 时永远有 3 个
    方法无法评估，只有跨数据集历史（L3）才能给出先验。
-2. **selection bias 已被实测**：triaxial 冠军 validation 88.1%，test 仍 77.38%；
-   在 84 条 test 上 ±1 条 = 1.2 个点，任何小差异都不能下结论。
-3. **没有可行性过滤**：某些方法参数与窗口长度不匹配时仍会占掉一个 unit（L2）。
-4. **aero 已饱和**：0.9967 是天花板，继续在它上面调策略没有信息量。
+2. **评估已修好，结论要按新数字写**：aero test 98.0% ± 1.6%、triaxial test 82.6% ± 2.9%
+   （5 个独立切分）。单切分的 100% / 77.38% 是端点，不要再当成最终数字。
+3. **`cli/` 仍然缺失**：所有能力只能通过 scripts 调用，没有统一入口。
+4. **aero 已饱和**：validation 五折全 1.0，继续在它上面调策略没有信息量；
+   要用 triaxial 或第三个数据集。

@@ -49,6 +49,16 @@ def main() -> int:
         help="group-isolated validation splits averaged per trial",
     )
     parser.add_argument(
+        "--test-mode",
+        default="single",
+        choices=("single", "per-seed"),
+        help=(
+            "single: open the champion's test partition once. "
+            "per-seed: each seed selects on its own validation and is scored on "
+            "its own test partition, then reported as mean +/- std."
+        ),
+    )
+    parser.add_argument(
         "--arms",
         default="agent,random,fixed,exhaustive",
         help="comma separated subset of agent,random,fixed,exhaustive",
@@ -70,6 +80,7 @@ def main() -> int:
         units=args.units,
         seeds=seeds,
         validation_repeats=args.validation_repeats,
+        test_mode=args.test_mode,
         arms=tuple(part.strip() for part in args.arms.split(",") if part.strip()),
         cache_root=args.cache_root,
         memory_path=args.memory,
@@ -81,11 +92,19 @@ def main() -> int:
         print(f"champion: {summary['champion']['method']} + {summary['champion']['classifier']}")
         print(f"champion validation: {summary['champion_validation']}")
     if summary["test"]:
-        test = summary["test"]["test"]
-        print(
-            f"test (single shot): accuracy={test['multiclass_accuracy']:.4f} "
-            f"macro_f1={test['multiclass_macro_f1']:.4f}"
-        )
+        if summary["test"].get("mode") == "per-seed":
+            print(
+                f"test (per seed, {summary['test']['seeds']} seeds): "
+                f"accuracy={summary['test']['mean_accuracy']:.4f} "
+                f"+/- {summary['test']['std_accuracy']:.4f} "
+                f"macro_f1={summary['test']['mean_macro_f1']:.4f}"
+            )
+        else:
+            test = summary["test"]["test"]
+            print(
+                f"test (single shot): accuracy={test['multiclass_accuracy']:.4f} "
+                f"macro_f1={test['multiclass_macro_f1']:.4f}"
+            )
     print(f"report -> {args.output / 'report.md'}")
     return 0
 

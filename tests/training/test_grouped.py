@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from entropy_agent.training.grouped import (
+    bootstrap_metric_ci,
     evaluate_channel_candidates,
     stratified_group_split,
 )
@@ -121,3 +122,31 @@ def test_grouped_protocol_rejects_non_bt_backends() -> None:
             class_names=("healthy", "fault"),
             classifier_backend="sklearn",
         )
+
+
+def test_bootstrap_interval_brackets_the_point_estimate() -> None:
+    truth = np.repeat(np.arange(3), 10)
+    predicted = truth.copy()
+    predicted[:3] = (predicted[:3] + 1) % 3
+
+    interval = bootstrap_metric_ci(truth, predicted, class_count=3, iterations=400, seed=5)
+
+    point = float(np.mean(truth == predicted))
+    assert interval["rows"] == 30
+    assert interval["accuracy"]["low"] <= point <= interval["accuracy"]["high"]
+    assert 0.0 <= interval["accuracy"]["low"] <= interval["accuracy"]["high"] <= 1.0
+
+
+def test_bootstrap_is_reproducible_and_rejects_bad_input() -> None:
+    truth = np.repeat(np.arange(3), 10)
+    predicted = truth.copy()
+    first = bootstrap_metric_ci(truth, predicted, class_count=3, iterations=200, seed=1)
+    second = bootstrap_metric_ci(truth, predicted, class_count=3, iterations=200, seed=1)
+    assert first == second
+
+    with pytest.raises(ValueError):
+        bootstrap_metric_ci(truth, predicted[:-1], class_count=3)
+    with pytest.raises(ValueError):
+        bootstrap_metric_ci(truth, predicted, class_count=3, iterations=0)
+    with pytest.raises(ValueError):
+        bootstrap_metric_ci(truth, predicted, class_count=3, confidence=1.5)
