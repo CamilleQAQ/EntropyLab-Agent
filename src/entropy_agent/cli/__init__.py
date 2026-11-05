@@ -136,6 +136,37 @@ def _cmd_agent_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_continual_run(args: argparse.Namespace) -> int:
+    from ..continual import BatchPlan, run_continual
+
+    spec = load_dataset_spec(args.spec)
+    plan = BatchPlan.load(args.plan)
+    summary = run_continual(
+        spec,
+        args.data_root,
+        plan,
+        args.output,
+        model_prefix=args.model_prefix,
+        run_holdout=not args.no_holdout,
+    )
+    print(f"plan         : {args.plan}")
+    print(f"batches      : {summary['plan']['groups']['batches']}")
+    for row in summary["trajectory"]:
+        decision = "promote" if row["promoted"] else "reject"
+        print(
+            f"batch {row['batch_id']} ({row['note']}): training {row['training_records']} "
+            f"challenger {row['challenger_macro_f1']:.4f} -> champion "
+            f"{row['champion_macro_f1']:.4f} [{decision}]"
+        )
+    if summary.get("holdout"):
+        for name in ("frozen", "continual", "joint"):
+            entry = summary["holdout"].get(name)
+            if entry:
+                print(f"holdout {name:9s}: accuracy {entry['accuracy']:.4f} macro-F1 {entry['macro_f1']:.4f}")
+    print(f"report       : {Path(args.output) / 'report.md'}")
+    return 0
+
+
 def _registry(args: argparse.Namespace):
     from ..diagnosis import ModelRegistry
 
@@ -379,6 +410,18 @@ def _build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--output", type=Path, default=None)
     _add_signal_arguments(batch)
     batch.set_defaults(handler=_cmd_diagnose_batch)
+
+    # -- continual -------------------------------------------------------
+    continual = sub.add_parser("continual", help="continual learning commands")
+    continual_sub = continual.add_subparsers(dest="continual_command", required=True)
+    continual_run = continual_sub.add_parser("run", help="run the batch loop")
+    continual_run.add_argument("--spec", type=Path, required=True)
+    continual_run.add_argument("--data-root", type=Path, required=True)
+    continual_run.add_argument("--plan", type=Path, required=True)
+    continual_run.add_argument("--output", type=Path, required=True)
+    continual_run.add_argument("--model-prefix", default="continual")
+    continual_run.add_argument("--no-holdout", action="store_true")
+    continual_run.set_defaults(handler=_cmd_continual_run)
 
     # -- inspect ---------------------------------------------------------
     inspect = sub.add_parser("inspect", help="describe a signal file's columns/arrays")

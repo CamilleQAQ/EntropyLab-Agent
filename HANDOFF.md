@@ -34,8 +34,10 @@ anchor 文档里的单切分数字（aero 98.33%、triaxial 77.38%、gear 53.03%
 
 OOD 留一类验证是负结果：未知类误接受率 53%（见 `docs/08`）。
 **CLI 与诊断入口已打通**（`docs/15`）：`entropylab agent run / train / models / diagnose /
-diagnose-batch / inspect`，真实冠军已注册，5 条真实信号 5/5 诊断正确。
-下一个有信息量的方向：可视化 / 通道选择 / 第 4-5 个数据集（L3 需要 ≥5）/ 持续学习。
+diagnose-batch / continual / inspect`，真实冠军已注册，5 条真实信号 5/5 诊断正确。
+**持续学习机制已实现**（`docs/16`），但现有数据集回答不了“它有没有用”：
+aero 饱和（三臂全 1.0），gear 只有 37 个文件、holdout 无法分层（三臂区分不开）。
+下一个有信息量的方向：找一个“每批够大 + 有真实漂移”的数据集 / 可视化。
 
 ---
 
@@ -127,16 +129,17 @@ src/entropy_agent/
   training/                   grouped split + generic training
   diagnosis/                  v4 artifact、runner、profile registry
   agent/                      v1.4 选型：8 熵 + 5 融合族、逐记录缓存、秒预算、多 seed
-  cli/                        统一入口：agent run / train / models / diagnose / inspect
-tests/                        289 passed（231 旧 + 58 Agent/评估协议/CLI）
+  cli/                        统一入口：agent run / train / models / diagnose / continual
+  continual/                  持续学习：批次计划、champion/challenger、三臂对比
+tests/                        295 passed（231 旧 + 64 Agent/评估协议/CLI/持续学习）
 ```
 
 ### 还没迁移/还没做
 
-- `continual/`（持续学习：新批次、champion/challenger、replay、rollback）；
 - 可视化（特征随尺度曲线、混淆矩阵、预算-性能曲线；全仓库 0 行 matplotlib）；
 - 数据集 catalog（现在 spec 仍要手传路径，不能按元数据选择）；
 - Agent L3：跨数据集元学习（需要 ≥5 个数据集，现有 3 个）；
+- 持续学习的数据前提：现有三个数据集都回答不了“CL 有没有用”，需要新数据集（`docs/16` §6）；
 - `experiments/`：**不做**（用户 2026-11-05 明确放弃论文全表复现）。
 
 ### 测试
@@ -147,7 +150,7 @@ $env:PYTHONPATH="$PWD\src"
 python -m pytest tests -q --basetemp="$PWD\.pytest-tmp"
 ```
 
-当前结果：**289 passed**。
+当前结果：**295 passed**。
 
 在 DSH 的受限沙箱里跑不通：pytest 要创建/删除临时目录，会被沙箱拒绝（表现为
 大量 setup error + `sessionfinish` 的 `PermissionError`）。用「完全权限」跑即可。
@@ -397,6 +400,31 @@ agent run / train / models list|register|show|delete / diagnose / diagnose-batch
 - 诚实限制：注册表只保证元数据契约，**不保证信号属于该设备**（那属于 OOD，而 OOD 不可靠）。
 
 
+### 持续学习 v1（docs/16）—— 机制可用，数据不支持结论
+
+- continual/：BatchPlan（批次/validation/holdout 互斥，组级）+ 
+un_continual()
+  （逐批重训、champion/challenger、margin 0.005、三臂 holdout）；
+- 计划生成器 scripts/prepare_continual_plan.py：chronological 与 y-load 两种策略；
+- CLI：entropylab continual run --spec --data-root --plan --output；
+- 测试：6 个（重复组/漏组/holdout 泄漏/只增不减/promote 规则/计划往返）。
+
+| 运行 | frozen | continual | joint | 说明 |
+|---|---:|---:|---:|---|
+| aero（3 批×60 条） | 1.0000 | 1.0000 | 1.0000 | 饱和，无信息量 |
+| gear A（按类 validation） | 0.6333 | 0.6333 | **0.7667** | 三次更新全被拒（旧域掉了 3 点） |
+| gear B（按载荷分层 validation） | 0.8000 | 0.8000 | 0.8000 | validation 0.11–0.15 与 holdout 0.80 分布不一致 |
+
+两个可复现的失败模式：
+
+1. **只用初始域做 validation**，持续学习退化为“永不更新”（gear A）；
+2. **validation 与 holdout 不同分布**，选模型和报结果用的不是一把尺子（gear B，
+   validation 覆盖三载荷层、holdout 只有 5 组落在一个层）。
+
+结论：机制成立、测试齐全，但**“持续学习是否提升最终诊断”在本仓库没有可信答案**。
+需要“每批够大 + 真实漂移 + holdout 能分层”的新数据集（docs/16 §7）。
+
+
 ### 作废结果，不要再引用
 
 - Aero-engine 二分类 69.7%：旧配置，不是论文 5 类协议；
@@ -523,10 +551,10 @@ v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 1. 读 HANDOFF.md
 2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、
    docs/09（v1.1）、docs/10（v1.2）、docs/11（L2 + test 协议）、docs/12（齿轮数据集）、
-   docs/13（融合族）、docs/14（秒预算）、docs/15（CLI + 诊断入口）
-3. 用「完全权限」跑 289 tests（受限沙箱会挡住 pytest 临时目录）
+   docs/13（融合族）、docs/14（秒预算）、docs/15（CLI + 诊断入口）、docs/16（持续学习）
+3. 用「完全权限」跑 295 tests（受限沙箱会挡住 pytest 临时目录）
 4. 检查 anchor / agent / ood 的 results/ 是否还在（三个数据集都有）
-5. 可视化 / 通道选择 / 第 4-5 个数据集；持续学习最后做
+5. 可视化 / 通道选择 / 找一个能支撑持续学习结论的新数据集
 ```
 
 不要重新论证论文方法是否有效，也不要再重跑两个 anchor。  
@@ -551,3 +579,5 @@ OOD、Agent 贪心选型、单切分高估这些负结果写在 `docs/08`–`doc
 6. **没有可视化**：论文/简历需要的特征曲线、混淆矩阵图、预算-性能曲线都还没有（0 行 matplotlib）。
 7. **aero 已饱和**：validation 五折全 1.0，继续在它上面调策略没有信息量；
    策略对比要用 triaxial（中等）和 gear（难，方差大）。
+8. **持续学习缺数据前提**：机制已实现，但 aero 饱和、gear 太小（holdout 无法分层），
+   要回答“CL 有没有用”必须换数据集，见 docs/16 §7。
