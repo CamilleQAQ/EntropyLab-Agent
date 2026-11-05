@@ -1,0 +1,103 @@
+{
+  "format": "entropylab.dataset-spec",
+  "format_version": 1,
+  "dataset_id": "VBL_4CLASS_FUSION_TIME_EXTRA_TREES",
+  "sampling_rate_hz": 20000,
+  "input": {
+    "channel": 0,
+    "key": null,
+    "sample_axis": -1,
+    "indices": [],
+    "has_header": false,
+    "delimiter": ",",
+    "skip_rows": 0
+  },
+  "layout": {
+    "loader": "npy_tensor",
+    "file_pattern": "**/*.npy",
+    "manifest": null,
+    "label_source": "parent",
+    "group_source": "file",
+    "group_regex": null,
+    "packed_files": [
+      {
+        "path": "class1.npy",
+        "label": "NORMAL"
+      },
+      {
+        "path": "class2.npy",
+        "label": "BEARING"
+      },
+      {
+        "path": "class3.npy",
+        "label": "MISALIGNMENT"
+      },
+      {
+        "path": "class4.npy",
+        "label": "UNBALANCE"
+      }
+    ],
+    "record_axis": 0,
+    "channel_axis": 1,
+    "sample_axis": 2,
+    "group_size": 1
+  },
+  "labels": {
+    "names": [
+      "NORMAL",
+      "BEARING",
+      "MISALIGNMENT",
+      "UNBALANCE"
+    ],
+    "mapping": {
+      "NORMAL": 0,
+      "BEARING": 1,
+      "MISALIGNMENT": 2,
+      "UNBALANCE": 3
+    },
+    "healthy_class_id": 0
+  },
+  "window": {
+    "size": 2048,
+    "stride": 2048,
+    "windows_per_record": 1
+  },
+  "preprocessing": "NONE",
+  "feature": {
+    "method": "FUSION_TIME",
+    "parameters": {}
+  },
+  "classifier": {
+    "algorithm": "EXTRA-TREES",
+    "backend": "scikit-learn",
+    "parameters": {
+      "n_estimators": 600,
+      "max_depth": null,
+      "min_samples_leaf": 1,
+      "class_weight": null,
+      "random_state": 0
+    }
+  },
+  "split": {
+    "mode": "random",
+    "seed": 20261104,
+    "train_fraction": 0.6,
+    "validation_fraction": 0.2
+  },
+  "ood": {
+    "calibration": "DISABLED",
+    "margin": 1.05
+  },
+  "diagnosis": {
+    "profile_id": "VBL_4CLASS",
+    "display_name": "VBL-VA001 4-class lab vibration, FUSION_TIME + ExtraTrees",
+    "workflow": "MODEL_ARTIFACT_DIAGNOSIS",
+    "signal_type": "ACCELERATION",
+    "signal_role": "LAB_MACHINE_VIBRATION_CHANNEL_3",
+    "sampling_rate_tolerance_hz": 0,
+    "minimum_window_count": 1,
+    "evidence_window_count": 1,
+    "validation_scope": "unit-isolated continual-learning protocol on VBL-VA001",
+    "experimental": true
+  }
+}

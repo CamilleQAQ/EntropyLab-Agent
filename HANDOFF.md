@@ -130,6 +130,7 @@ src/entropy_agent/
   diagnosis/                  v4 artifact、runner、profile registry
   agent/                      v1.4 选型：8 熵 + 5 融合族、逐记录缓存、秒预算、多 seed
   cli/                        统一入口：agent run / train / models / diagnose / continual
+（第四个数据集 VBL-VA001 用 scripts/prepare_vbl_4class.py 打包，不新增核心代码）
   continual/                  持续学习：批次计划、champion/challenger、三臂对比
 tests/                        295 passed（231 旧 + 64 Agent/评估协议/CLI/持续学习）
 ```
@@ -414,6 +415,7 @@ un_continual()
 | aero（3 批×60 条） | 1.0000 | 1.0000 | 1.0000 | 饱和，无信息量 |
 | gear A（按类 validation） | 0.6333 | 0.6333 | **0.7667** | 三次更新全被拒（旧域掉了 3 点） |
 | gear B（按载荷分层 validation） | 0.8000 | 0.8000 | 0.8000 | validation 0.11–0.15 与 holdout 0.80 分布不一致 |
+| **VBL-VA001（unit 隔离，5 分区）** | 0.9017 | **0.9188** | 0.9188 | **正结果：+1.7 点，且追平 joint** |
 
 两个可复现的失败模式：
 
@@ -421,8 +423,9 @@ un_continual()
 2. **validation 与 holdout 不同分布**，选模型和报结果用的不是一把尺子（gear B，
    validation 覆盖三载荷层、holdout 只有 5 组落在一个层）。
 
-结论：机制成立、测试齐全，但**“持续学习是否提升最终诊断”在本仓库没有可信答案**。
-需要“每批够大 + 真实漂移 + holdout 能分层”的新数据集（docs/16 §7）。
+结论：机制成立、测试齐全。**VBL-VA001 给出了可信的正结果**（第 5 个数据集，
+scripts/prepare_vbl_4class.py + prepare_vbl_continual_plan.py）；
+aero/gear 回答不了，原因已定位（饱和 / 组数不够）。
 
 
 ### 作废结果，不要再引用
@@ -579,5 +582,5 @@ OOD、Agent 贪心选型、单切分高估这些负结果写在 `docs/08`–`doc
 6. **没有可视化**：论文/简历需要的特征曲线、混淆矩阵图、预算-性能曲线都还没有（0 行 matplotlib）。
 7. **aero 已饱和**：validation 五折全 1.0，继续在它上面调策略没有信息量；
    策略对比要用 triaxial（中等）和 gear（难，方差大）。
-8. **持续学习缺数据前提**：机制已实现，但 aero 饱和、gear 太小（holdout 无法分层），
-   要回答“CL 有没有用”必须换数据集，见 docs/16 §7。
+8. **持续学习只在 VBL 上有结论**：aero 饱和、gear 组数不够；VBL 拿到 +1.7 点并追平 joint，
+   但仍只有 3 个 round、没有遗忘探针（docs/16 §8）。
