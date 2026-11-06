@@ -29,6 +29,7 @@ from ..training.pipeline import (
     extract_features,
     train_dataset,
 )
+from .decision import Decision, decide
 from .plan import BatchPlan
 
 
@@ -68,8 +69,9 @@ def _prepared(
 
 def _names(masks: dict[str, np.ndarray]):
     names = ["train"] * len(next(iter(masks.values())))
-    for split_name in ("validation", "test"):
-        mask = masks[split_name]
+    for split_name, mask in masks.items():
+        if split_name == "train":
+            continue
         for index in np.flatnonzero(mask):
             names[int(index)] = split_name
     return names
@@ -81,6 +83,9 @@ def _decision(
     champion: Champion | None,
     promoted: bool,
     reason: str,
+    retention_drop: float | None = None,
+    gain_new: float | None = None,
+    probe_scores: dict | None = None,
 ) -> dict:
     return {
         "batch_id": batch_id,
@@ -101,6 +106,9 @@ def _decision(
         ),
         "promoted": promoted,
         "reason": reason,
+        "retention_drop": None if retention_drop is None else round(float(retention_drop), 6),
+        "gain_new": None if gain_new is None else round(float(gain_new), 6),
+        "probe_scores": probe_scores,
     }
 
 
@@ -112,6 +120,9 @@ def run_continual(
     *,
     model_prefix: str = "continual",
     run_holdout: bool = True,
+    criterion: str = "margin",
+    guard_tolerance: float = 0.02,
+    min_gain: float = 0.0,
 ) -> dict:
     if plan.dataset_id != spec.dataset_id:
         raise ValueError(
@@ -133,8 +144,22 @@ def run_continual(
     frozen: Champion | None = None
     trajectory: list[dict] = []
 
+    # Probe sets are never trained on: the reference-domain validation set plus
+    # every batch's own probes.  They are what makes the guardrail identifiable
+    # even when validation accuracy saturates.
+    groups_array = np.asarray([record.group for record in records], dtype=object)
+    probe_sets: dict[str, np.ndarray] = {
+        "reference": np.isin(groups_array, np.asarray(plan.validation_groups, dtype=object))
+    }
+    for probe_batch in plan.batches:
+        if probe_batch.probe_groups:
+            probe_sets[f"batch-{probe_batch.batch_id}"] = np.isin(
+                groups_array, np.asarray(probe_batch.probe_groups, dtype=object)
+            )
+
     for batch_index in range(plan.batch_count):
         masks = plan.masks(records, batch_index)
+        masks.update(probe_sets)
         prepared = _prepared(spec, records, features, labels, dimension, masks)
         model_id = f"{model_prefix}-{spec.dataset_id.lower()}-batch-{batch_index}"
         result = train_dataset(
@@ -153,16 +178,67 @@ def run_continual(
             "training_records": int(masks["train"].sum()),
         }
 
+        retention_drop = None
+        gain_new = None
+        probe_scores = None
         if champion is None:
-            promoted, reason = True, "initial batch: the first model becomes the champion"
+            decision = Decision(True, "initial batch: the first model becomes the champion")
         else:
-            threshold = champion.validation_macro_f1 + plan.margin
-            promoted = challenger["val_macro_f1"] >= threshold
-            reason = (
-                f"{challenger['val_macro_f1']:.4f} vs {champion.validation_macro_f1:.4f} "
-                f"(needs {threshold:.4f} = champion + margin {plan.margin})"
+            if criterion == "guardrail":
+                champion_scores = {
+                    name: float(
+                        evaluate_partition(
+                            prepared, champion.model, name, healthy_class_id=healthy
+                        )[0]["multiclass_accuracy"]
+                    )
+                    for name in probe_sets
+                }
+                challenger_scores = {
+                    name: float(
+                        evaluate_partition(
+                            prepared, result.artifact.model, name, healthy_class_id=healthy
+                        )[0]["multiclass_accuracy"]
+                    )
+                    for name in probe_sets
+                }
+                probe_scores = {
+                    "champion": {k: round(v, 4) for k, v in champion_scores.items()},
+                    "challenger": {k: round(v, 4) for k, v in challenger_scores.items()},
+                }
+                current = f"batch-{batch_index}"
+                if current in probe_sets:
+                    gain_new = challenger_scores[current] - champion_scores[current]
+                else:
+                    gain_new = challenger["val_accuracy"] - champion.validation_accuracy
+                previous = [name for name in probe_sets if name != current]
+                retention_drop = (
+                    max(champion_scores[name] - challenger_scores[name] for name in previous)
+                    if previous
+                    else 0.0
+                )
+            decision = decide(
+                criterion=criterion,
+                champion_validation_macro_f1=champion.validation_macro_f1,
+                challenger_validation_macro_f1=challenger["val_macro_f1"],
+                margin=plan.margin,
+                retention_drop=retention_drop,
+                gain_new=gain_new,
+                guard_tolerance=guard_tolerance,
+                min_gain=min_gain,
             )
-        decisions.append(_decision(batch_index, challenger, champion, promoted, reason))
+        promoted, reason = decision.promoted, decision.reason
+        decisions.append(
+            _decision(
+                batch_index,
+                challenger,
+                champion,
+                promoted,
+                reason,
+                decision.retention_drop,
+                decision.gain_new,
+                probe_scores,
+            )
+        )
 
         if promoted:
             champion = Champion(
@@ -182,6 +258,10 @@ def run_continual(
                 "training_records": challenger["training_records"],
                 "challenger_macro_f1": round(challenger["val_macro_f1"], 6),
                 "champion_macro_f1": round(champion.validation_macro_f1, 6),
+                "retention_drop": None
+                if retention_drop is None
+                else round(float(retention_drop), 6),
+                "gain_new": None if gain_new is None else round(float(gain_new), 6),
                 "promoted": promoted,
             }
         )
@@ -253,6 +333,9 @@ def run_continual(
             "classifier": spec.classifier.algorithm,
         },
         "plan": plan_info,
+        "criterion": criterion,
+        "guard_tolerance": guard_tolerance,
+        "min_gain": min_gain,
         "margin": plan.margin,
         "batches": [
             {"batch_id": batch.batch_id, "note": batch.note, "groups": len(batch.groups)}

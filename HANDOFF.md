@@ -463,6 +463,28 @@ VBL 的 5 划分结果显示 +0.3 点（1/5 胜出、p=0.25）且落后 joint 0.
 因为 5 个划分是同一批测量的重复分配；只能报逐划分配对。
 
 
+### V2 第一步：换判据（docs/18）
+
+- continual/decision.py：decide() 支持 margin（V1）与 guardrail（V2）两种判据；
+- guardrail = 在**永不训练**的 probe 集上算 
+etention_drop（guardrail）与
+  gain_new（objective），
+etention_drop ≤ 0.02 且 gain_new > 0 才提交；
+- Batch.probe_groups 已加入计划格式，probe 永不进入训练（有断言）；
+- CLI：--criterion guardrail --guard-tolerance 0.02 --min-gain 0.0。
+
+Paderborn，5 个独立划分，同一固定配置：
+
+| 判据 | continual | 逐划分 continual−frozen |
+|---|---:|---|
+| margin（V1） | 0.9028 ± 0.0354 | +0.0185 ± 0.0414（1/5 胜） |
+| **guardrail（V2）** | **0.9593 ± 0.0069** | **+0.0750 ± 0.0124（5/5 胜）** |
+
+continual 与 joint 完全相等（0.9593 = 0.9593）——但这是**构造性**的：最后一轮历史
+= 全部数据，两者训练集相同。所以这一步证明的是增量更新能拿到全部数据的收益，
+不是优于联合重训。
+
+
 ### 作废结果，不要再引用
 
 - Aero-engine 二分类 69.7%：旧配置，不是论文 5 类协议；
@@ -590,7 +612,7 @@ v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、
    docs/09（v1.1）、docs/10（v1.2）、docs/11（L2 + test 协议）、docs/12（齿轮数据集）、
    docs/13（融合族）、docs/14（秒预算）、docs/15（CLI + 诊断入口）、docs/16（持续学习）、
-   docs/17（Paderborn 数据集）
+   docs/17（Paderborn 数据集）、docs/18（V2 决策层）
 3. 用「完全权限」跑 295 tests（受限沙箱会挡住 pytest 临时目录）
 4. 检查 anchor / agent / ood 的 results/ 是否还在（三个数据集都有）
 5. 可视化 / 通道选择 / 找一个能支撑持续学习结论的新数据集

@@ -148,6 +148,9 @@ def _cmd_continual_run(args: argparse.Namespace) -> int:
         args.output,
         model_prefix=args.model_prefix,
         run_holdout=not args.no_holdout,
+        criterion=args.criterion,
+        guard_tolerance=args.guard_tolerance,
+        min_gain=args.min_gain,
     )
     print(f"plan         : {args.plan}")
     print(f"batches      : {summary['plan']['groups']['batches']}")
@@ -421,6 +424,12 @@ def _build_parser() -> argparse.ArgumentParser:
     continual_run.add_argument("--output", type=Path, required=True)
     continual_run.add_argument("--model-prefix", default="continual")
     continual_run.add_argument("--no-holdout", action="store_true")
+    continual_run.add_argument(
+        "--criterion", choices=("margin", "guardrail"), default="margin",
+        help="promotion rule: fixed margin (V1) or probe guardrail (V2)",
+    )
+    continual_run.add_argument("--guard-tolerance", type=float, default=0.02)
+    continual_run.add_argument("--min-gain", type=float, default=0.0)
     continual_run.set_defaults(handler=_cmd_continual_run)
 
     # -- inspect ---------------------------------------------------------
