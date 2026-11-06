@@ -132,7 +132,7 @@ src/entropy_agent/
   diagnosis/                  v4 artifact、runner、profile registry
   agent/                      v1.4 选型：8 熵 + 5 融合族、逐记录缓存、秒预算、多 seed
   cli/                        统一入口：agent run / train / models / diagnose / continual
-（第四个数据集 VBL-VA001 用 scripts/prepare_vbl_4class.py 打包，不新增核心代码）
+（新增数据集只用适配器脚本：VBL = prepare_vbl_4class.py，Paderborn = prepare_paderborn_3class.py）
   continual/                  持续学习：批次计划、champion/challenger、三臂对比
 tests/                        295 passed（231 旧 + 64 Agent/评估协议/CLI/持续学习）
 ```
@@ -432,6 +432,37 @@ VBL 的 5 划分结果显示 +0.3 点（1/5 胜出、p=0.25）且落后 joint 0.
 修判据之前不得对外说正向。
 
 
+### Paderborn：第三个能撑住实验的数据集（docs/17）
+
+- 数据：Paderborn-source-verification-20261102，32 个轴承、4 个工况、每工况 20 次测量；
+  信号 Y.vibration_1（64 kHz）；
+- 标签来自 factsheet 的 Component 字段，**不是** KA/KI 前缀（KA04/KA15 是寿命试验退化，
+  KI08 是电刻损伤）；
+- 原型 9 轴承（HEALTHY/OR/IR 各 3），损伤全部选“寿命试验”，避免“制造方式”成为捷径；
+- 适配器 scripts/prepare_paderborn_3class.py，计划 prepare_paderborn_continual_plan.py。
+
+可行性探针：同工况内 4 轴承分类 = 1.0000；跨工况 0.87–1.00（N15 内部）、0.29–0.35（N09）。
+**历史 24–40% 是跨工况混训导致的，不是数据问题。**
+
+基线（5 个划分，FUSION_TIME + ExtraTrees）：
+
+| 臂 | accuracy | macro-F1 |
+|---|---:|---:|
+| frozen | 0.8843 ± 0.0135 | 0.8828 |
+| continual | 0.9028 ± 0.0354 | 0.9015 |
+| joint | **0.9593 ± 0.0069** | 0.9592 |
+
+- 逐划分配对 continual − frozen = **+0.0185 ± 0.0414，只赢 1/5**；
+- 唯一赢的那次是 seed 4：round 2 的 challenger 摸到 1.0000 → promote，holdout 直接 +9.3 点，
+  并与 joint 持平（0.9630 = 0.9630）；
+- 其余 4 个划分的 round-0 验证集已是 0.96–0.98，**判据无法触发**；
+- 按工况：headroom 全在 N15_M07_F04（0.75 → 0.97），而补上它会伤 N15_M07_F10（−2.8 点）
+  → guardrail 有真实用武之地。
+
+**统计陷阱**：池化 bootstrap（+0.0185 [0.0111, 0.0269]）与 McNemar（p=1.1e-05）不可信，
+因为 5 个划分是同一批测量的重复分配；只能报逐划分配对。
+
+
 ### 作废结果，不要再引用
 
 - Aero-engine 二分类 69.7%：旧配置，不是论文 5 类协议；
@@ -558,7 +589,8 @@ v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 1. 读 HANDOFF.md
 2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、
    docs/09（v1.1）、docs/10（v1.2）、docs/11（L2 + test 协议）、docs/12（齿轮数据集）、
-   docs/13（融合族）、docs/14（秒预算）、docs/15（CLI + 诊断入口）、docs/16（持续学习）
+   docs/13（融合族）、docs/14（秒预算）、docs/15（CLI + 诊断入口）、docs/16（持续学习）、
+   docs/17（Paderborn 数据集）
 3. 用「完全权限」跑 295 tests（受限沙箱会挡住 pytest 临时目录）
 4. 检查 anchor / agent / ood 的 results/ 是否还在（三个数据集都有）
 5. 可视化 / 通道选择 / 找一个能支撑持续学习结论的新数据集

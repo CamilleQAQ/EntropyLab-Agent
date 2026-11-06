@@ -33,6 +33,9 @@ class Batch:
     batch_id: int
     groups: tuple[str, ...]
     note: str = ""
+    # Probe groups belong to this batch's domain but are never trained on: they
+    # measure retention and new-domain gains for the V2 decision layer.
+    probe_groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,7 @@ class BatchPlan:
                 batch_id=int(entry["batch_id"]),
                 groups=tuple(str(group) for group in entry["groups"]),
                 note=str(entry.get("note", "")),
+                probe_groups=tuple(str(g) for g in entry.get("probe_groups", ())),
             )
             for entry in payload["batches"]
         )
@@ -94,7 +98,12 @@ class BatchPlan:
             "margin": self.margin,
             "notes": self.notes,
             "batches": [
-                {"batch_id": batch.batch_id, "groups": list(batch.groups), "note": batch.note}
+                {
+                    "batch_id": batch.batch_id,
+                    "groups": list(batch.groups),
+                    "note": batch.note,
+                    "probe_groups": list(batch.probe_groups),
+                }
                 for batch in self.batches
             ],
             "validation_groups": list(self.validation_groups),
@@ -130,6 +139,7 @@ class BatchPlan:
             self.validation_groups
             + self.holdout_groups
             + tuple(group for batch in self.batches for group in batch.groups)
+            + tuple(group for batch in self.batches for group in batch.probe_groups)
         )
         if len(set(planned)) != len(planned):
             duplicates = sorted(
@@ -159,6 +169,7 @@ class BatchPlan:
             "batches": self.batch_count,
             "groups": {
                 "batches": [len(batch.groups) for batch in self.batches],
+                "probes": [len(batch.probe_groups) for batch in self.batches],
                 "validation": len(self.validation_groups),
                 "holdout": len(self.holdout_groups),
             },
@@ -172,6 +183,15 @@ class BatchPlan:
         """Train on history through ``batch_index``; validation frozen; test = holdout."""
         groups = np.asarray([record.group for record in records], dtype=object)
         history = np.isin(groups, np.asarray(self.history_groups(batch_index), dtype=object))
+        probes = np.isin(
+            groups,
+            np.asarray(
+                [g for batch in self.batches[: batch_index + 1] for g in batch.probe_groups],
+                dtype=object,
+            ),
+        )
+        if probes.any() and (probes & history).any():
+            raise PlanError("probe groups must never enter the training history")
         validation = np.isin(groups, np.asarray(self.validation_groups, dtype=object))
         holdout = np.isin(groups, np.asarray(self.holdout_groups, dtype=object))
         if history.any() and (history & validation).any():

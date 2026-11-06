@@ -1,0 +1,97 @@
+{
+  "format": "entropylab.dataset-spec",
+  "format_version": 1,
+  "dataset_id": "PADERBORN_3CLASS_FUSION_TIME_EXTRA_TREES",
+  "sampling_rate_hz": 64000,
+  "input": {
+    "channel": 0,
+    "key": null,
+    "sample_axis": -1,
+    "indices": [],
+    "has_header": false,
+    "delimiter": ",",
+    "skip_rows": 0
+  },
+  "layout": {
+    "loader": "npy_tensor",
+    "file_pattern": "**/*.npy",
+    "manifest": null,
+    "label_source": "parent",
+    "group_source": "file",
+    "group_regex": null,
+    "packed_files": [
+      {
+        "path": "class1.npy",
+        "label": "HEALTHY"
+      },
+      {
+        "path": "class2.npy",
+        "label": "OUTER_RING"
+      },
+      {
+        "path": "class3.npy",
+        "label": "INNER_RING"
+      }
+    ],
+    "record_axis": 0,
+    "channel_axis": 1,
+    "sample_axis": 2,
+    "group_size": 2
+  },
+  "labels": {
+    "names": [
+      "HEALTHY",
+      "OUTER_RING",
+      "INNER_RING"
+    ],
+    "mapping": {
+      "HEALTHY": 0,
+      "OUTER_RING": 1,
+      "INNER_RING": 2
+    },
+    "healthy_class_id": 0
+  },
+  "window": {
+    "size": 2048,
+    "stride": 2048,
+    "windows_per_record": 1
+  },
+  "preprocessing": "NONE",
+  "feature": {
+    "method": "FUSION_TIME",
+    "parameters": {}
+  },
+  "classifier": {
+    "algorithm": "EXTRA-TREES",
+    "backend": "scikit-learn",
+    "parameters": {
+      "n_estimators": 600,
+      "max_depth": null,
+      "min_samples_leaf": 1,
+      "class_weight": null,
+      "random_state": 0
+    }
+  },
+  "split": {
+    "mode": "random",
+    "seed": 20261104,
+    "train_fraction": 0.6,
+    "validation_fraction": 0.2
+  },
+  "ood": {
+    "calibration": "DISABLED",
+    "margin": 1.05
+  },
+  "diagnosis": {
+    "profile_id": "PADERBORN_3CLASS",
+    "display_name": "Paderborn 3-class bearing, FUSION_TIME + ExtraTrees",
+    "workflow": "MODEL_ARTIFACT_DIAGNOSIS",
+    "signal_type": "ACCELERATION",
+    "signal_role": "PADERBORN_VIBRATION_1",
+    "sampling_rate_tolerance_hz": 0,
+    "minimum_window_count": 1,
+    "evidence_window_count": 1,
+    "validation_scope": "measurement-isolated continual protocol on Paderborn N15 conditions",
+    "experimental": true
+  }
+}
