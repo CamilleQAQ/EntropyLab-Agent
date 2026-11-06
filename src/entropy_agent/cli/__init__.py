@@ -137,6 +137,7 @@ def _cmd_agent_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_continual_run(args: argparse.Namespace) -> int:
+    from ..agent.candidates import build_pool
     from ..continual import BatchPlan, run_continual
 
     spec = load_dataset_spec(args.spec)
@@ -151,21 +152,34 @@ def _cmd_continual_run(args: argparse.Namespace) -> int:
         criterion=args.criterion,
         guard_tolerance=args.guard_tolerance,
         min_gain=args.min_gain,
+        select=args.select,
+        selection_budget=args.selection_budget,
+        pool=build_pool() if args.select else None,
     )
     print(f"plan         : {args.plan}")
     print(f"batches      : {summary['plan']['groups']['batches']}")
     for row in summary["trajectory"]:
         decision = "promote" if row["promoted"] else "reject"
+        def _m(value):
+            return "—" if value is None else f"{float(value):.4f}"
+
         print(
             f"batch {row['batch_id']} ({row['note']}): training {row['training_records']} "
-            f"challenger {row['challenger_macro_f1']:.4f} -> champion "
-            f"{row['champion_macro_f1']:.4f} [{decision}]"
+            f"challenger {_m(row['challenger_macro_f1'])} -> champion "
+            f"{_m(row['champion_macro_f1'])} [{decision}]"
         )
     if summary.get("holdout"):
         for name in ("frozen", "continual", "joint"):
             entry = summary["holdout"].get(name)
             if entry:
                 print(f"holdout {name:9s}: accuracy {entry['accuracy']:.4f} macro-F1 {entry['macro_f1']:.4f}")
+    if summary.get("selection", {}).get("enabled"):
+        champion = summary.get("champion_configuration") or {}
+        print(
+            f"selection    : pool {summary['selection']['pool_size']}, budget "
+            f"{summary['selection']['budget_seconds']:.1f}s/round, final "
+            f"{champion.get('feature', '—')} + {champion.get('classifier', '—')}"
+        )
     print(f"report       : {Path(args.output) / 'report.md'}")
     return 0
 
@@ -430,6 +444,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     continual_run.add_argument("--guard-tolerance", type=float, default=0.02)
     continual_run.add_argument("--min-gain", type=float, default=0.0)
+    continual_run.add_argument(
+        "--select", action="store_true",
+        help="V2 step 2: let the agent re-select the feature family and classifier each round",
+    )
+    continual_run.add_argument("--selection-budget", type=float, default=12.0)
     continual_run.set_defaults(handler=_cmd_continual_run)
 
     # -- inspect ---------------------------------------------------------

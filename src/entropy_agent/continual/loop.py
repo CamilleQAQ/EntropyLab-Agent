@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..agent.cost import CostModel
 from ..io.dataset import DatasetSpec, load_dataset_records
 from ..training.pipeline import (
     PreparedDataset,
@@ -31,6 +32,7 @@ from ..training.pipeline import (
 )
 from .decision import Decision, decide
 from .plan import BatchPlan
+from .selection import _feature_key, features_for, select_and_train
 
 
 @dataclass
@@ -41,6 +43,9 @@ class Champion:
     model: object
     validation_macro_f1: float
     validation_accuracy: float
+    # The feature/classifier spec this champion was trained with.  With per-round
+    # selection the champion's feature space can differ from the round's anchor.
+    spec: object | None = None
 
 
 def _prepared(
@@ -91,9 +96,13 @@ def _decision(
         "batch_id": batch_id,
         "challenger": {
             "model_id": challenger["model_id"],
-            "validation_macro_f1": round(float(challenger["val_macro_f1"]), 6),
-            "validation_accuracy": round(float(challenger["val_accuracy"]), 6),
-            "training_records": int(challenger["training_records"]),
+            "validation_macro_f1": None
+            if challenger.get("val_macro_f1") is None
+            else round(float(challenger["val_macro_f1"]), 6),
+            "validation_accuracy": None
+            if challenger.get("val_accuracy") is None
+            else round(float(challenger["val_accuracy"]), 6),
+            "training_records": int(challenger.get("training_records") or 0),
         },
         "champion_before": (
             None
@@ -124,6 +133,10 @@ def run_continual(
     guard_tolerance: float = 0.02,
     min_gain: float = 0.0,
     features_bundle: tuple | None = None,
+    select: bool = False,
+    selection_budget: float = 12.0,
+    pool=None,
+    cost_model: CostModel | None = None,
 ) -> dict:
     if plan.dataset_id != spec.dataset_id:
         raise ValueError(
@@ -162,76 +175,134 @@ def run_continual(
                 groups_array, np.asarray(probe_batch.probe_groups, dtype=object)
             )
 
+    feature_cache: dict = {}
+    feature_cache[_feature_key(spec)] = (features, labels, dimension)
+    selection_pool = tuple(pool) if pool is not None else ()
+    selection_cost_model = cost_model if cost_model is not None else CostModel()
+    windows_per_unit = len(records) * spec.window.windows_per_record
+
     for batch_index in range(plan.batch_count):
         masks = plan.masks(records, batch_index)
         masks.update(probe_sets)
-        prepared = _prepared(spec, records, features, labels, dimension, masks)
-        model_id = f"{model_prefix}-{spec.dataset_id.lower()}-batch-{batch_index}"
-        result = train_dataset(
-            spec,
-            Path(data_root),
-            output_dir / "challengers" / f"batch-{batch_index}",
-            model_id=model_id,
-            prepared=prepared,
-            evaluate_test=False,
-        )
-        validation = result.test_result["validation"]
-        challenger = {
-            "model_id": model_id,
-            "val_macro_f1": float(validation["multiclass_macro_f1"]),
-            "val_accuracy": float(validation["multiclass_accuracy"]),
-            "training_records": int(masks["train"].sum()),
-        }
+        training_records = int(masks["train"].sum())
 
-        retention_drop = None
-        gain_new = None
-        probe_scores = None
-        if champion is None:
-            decision = Decision(True, "initial batch: the first model becomes the champion")
-        else:
-            if criterion == "guardrail":
-                champion_scores = {
-                    name: float(
-                        evaluate_partition(
-                            prepared, champion.model, name, healthy_class_id=healthy
-                        )[0]["multiclass_accuracy"]
-                    )
-                    for name in probe_sets
-                }
-                challenger_scores = {
-                    name: float(
-                        evaluate_partition(
-                            prepared, result.artifact.model, name, healthy_class_id=healthy
-                        )[0]["multiclass_accuracy"]
-                    )
-                    for name in probe_sets
-                }
-                probe_scores = {
-                    "champion": {k: round(v, 4) for k, v in champion_scores.items()},
-                    "challenger": {k: round(v, 4) for k, v in challenger_scores.items()},
-                }
-                current = f"batch-{batch_index}"
-                if current in probe_sets:
-                    gain_new = challenger_scores[current] - champion_scores[current]
-                else:
-                    gain_new = challenger["val_accuracy"] - champion.validation_accuracy
-                previous = [name for name in probe_sets if name != current]
-                retention_drop = (
-                    max(champion_scores[name] - challenger_scores[name] for name in previous)
-                    if previous
-                    else 0.0
-                )
-            decision = decide(
-                criterion=criterion,
-                champion_validation_macro_f1=champion.validation_macro_f1,
-                challenger_validation_macro_f1=challenger["val_macro_f1"],
-                margin=plan.margin,
-                retention_drop=retention_drop,
-                gain_new=gain_new,
+        if select:
+            selection = select_and_train(
+                spec=spec,
+                data_root=Path(data_root),
+                records=records,
+                labels=labels,
+                masks=masks,
+                probe_names=tuple(probe_sets),
+                champion=champion,
+                pool=selection_pool,
+                budget_seconds=selection_budget,
+                cost_model=selection_cost_model,
+                windows=windows_per_unit,
+                model_directory=output_dir / "candidates",
+                model_prefix=model_prefix,
+                batch_index=batch_index,
+                healthy=healthy,
                 guard_tolerance=guard_tolerance,
                 min_gain=min_gain,
+                margin=plan.margin,
+                feature_cache=feature_cache,
             )
-        promoted, reason = decision.promoted, decision.reason
+            challenger = {
+                "model_id": selection.model_id,
+                "val_macro_f1": selection.validation_macro_f1,
+                "val_accuracy": selection.validation_accuracy,
+                "training_records": training_records,
+            }
+            selected = selection.selected
+            retention_drop = None if selected is None else selected.retention_drop
+            gain_new = None if selected is None else selected.gain_new
+            probe_scores = {
+                "candidates": [outcome.__dict__ for outcome in selection.outcomes],
+                "spent_seconds": round(selection.spent_seconds, 3),
+                "skipped": selection.skipped,
+            }
+            promoted = selection.model is not None
+            if promoted:
+                reason = selected.reason if selected is not None else "committed"
+            else:
+                reason = "no paid candidate passed the guardrail"
+            new_spec = selection.spec
+            new_model = selection.model
+            new_directory = selection.model_directory
+        else:
+            prepared = _prepared(spec, records, features, labels, dimension, masks)
+            model_id = f"{model_prefix}-{spec.dataset_id.lower()}-batch-{batch_index}"
+            result = train_dataset(
+                spec,
+                Path(data_root),
+                output_dir / "challengers" / f"batch-{batch_index}",
+                model_id=model_id,
+                prepared=prepared,
+                evaluate_test=False,
+            )
+            validation = result.test_result["validation"]
+            challenger = {
+                "model_id": model_id,
+                "val_macro_f1": float(validation["multiclass_macro_f1"]),
+                "val_accuracy": float(validation["multiclass_accuracy"]),
+                "training_records": training_records,
+            }
+            retention_drop = None
+            gain_new = None
+            probe_scores = None
+            if champion is None:
+                decision = Decision(True, "initial batch: the first model becomes the champion")
+            else:
+                if criterion == "guardrail":
+                    champion_scores = {
+                        name: float(
+                            evaluate_partition(
+                                prepared, champion.model, name, healthy_class_id=healthy
+                            )[0]["multiclass_accuracy"]
+                        )
+                        for name in probe_sets
+                    }
+                    challenger_scores = {
+                        name: float(
+                            evaluate_partition(
+                                prepared, result.artifact.model, name, healthy_class_id=healthy
+                            )[0]["multiclass_accuracy"]
+                        )
+                        for name in probe_sets
+                    }
+                    probe_scores = {
+                        "champion": {k: round(v, 4) for k, v in champion_scores.items()},
+                        "challenger": {k: round(v, 4) for k, v in challenger_scores.items()},
+                    }
+                    current = f"batch-{batch_index}"
+                    if current in probe_sets:
+                        gain_new = challenger_scores[current] - champion_scores[current]
+                    else:
+                        gain_new = challenger["val_accuracy"] - champion.validation_accuracy
+                    previous = [name for name in probe_sets if name != current]
+                    retention_drop = (
+                        max(champion_scores[name] - challenger_scores[name] for name in previous)
+                        if previous
+                        else 0.0
+                    )
+                decision = decide(
+                    criterion=criterion,
+                    champion_validation_macro_f1=champion.validation_macro_f1,
+                    challenger_validation_macro_f1=challenger["val_macro_f1"],
+                    margin=plan.margin,
+                    retention_drop=retention_drop,
+                    gain_new=gain_new,
+                    guard_tolerance=guard_tolerance,
+                    min_gain=min_gain,
+                )
+            promoted, reason = decision.promoted, decision.reason
+            retention_drop = decision.retention_drop
+            gain_new = decision.gain_new
+            new_spec = spec
+            new_model = result.artifact.model
+            new_directory = output_dir / "challengers" / f"batch-{batch_index}"
+
         decisions.append(
             _decision(
                 batch_index,
@@ -239,20 +310,21 @@ def run_continual(
                 champion,
                 promoted,
                 reason,
-                decision.retention_drop,
-                decision.gain_new,
+                retention_drop,
+                gain_new,
                 probe_scores,
             )
         )
 
-        if promoted:
+        if promoted and new_model is not None:
             champion = Champion(
                 batch_id=batch_index,
-                model_id=model_id,
-                model_directory=output_dir / "challengers" / f"batch-{batch_index}",
-                model=result.artifact.model,
+                model_id=challenger["model_id"],
+                model_directory=new_directory,
+                model=new_model,
                 validation_macro_f1=challenger["val_macro_f1"],
                 validation_accuracy=challenger["val_accuracy"],
+                spec=new_spec,
             )
             if frozen is None:
                 frozen = champion
@@ -261,8 +333,8 @@ def run_continual(
                 "batch_id": batch_index,
                 "note": plan.batches[batch_index].note,
                 "training_records": challenger["training_records"],
-                "challenger_macro_f1": round(challenger["val_macro_f1"], 6),
-                "champion_macro_f1": round(champion.validation_macro_f1, 6),
+                "challenger_macro_f1": challenger["val_macro_f1"],
+                "champion_macro_f1": champion.validation_macro_f1 if champion else None,
                 "retention_drop": None
                 if retention_drop is None
                 else round(float(retention_drop), 6),
@@ -282,9 +354,19 @@ def run_continual(
             np.asarray([r.group for r in records], dtype=object), plan.holdout_groups
         ),
     }
-    joint_prepared = _prepared(spec, records, features, labels, dimension, joint_masks)
+    joint_spec = (
+        champion.spec
+        if (select and champion is not None and champion.spec is not None)
+        else spec
+    )
+    joint_features, joint_labels, joint_dimension = features_for(
+        joint_spec, data_root, records, feature_cache
+    )
+    joint_prepared = _prepared(
+        joint_spec, records, joint_features, joint_labels, joint_dimension, joint_masks
+    )
     joint_result = train_dataset(
-        spec,
+        joint_spec,
         Path(data_root),
         output_dir / "joint",
         model_id=f"{model_prefix}-{spec.dataset_id.lower()}-joint",
@@ -298,6 +380,7 @@ def run_continual(
         model=joint_result.artifact.model,
         validation_macro_f1=float(joint_result.test_result["validation"]["multiclass_macro_f1"]),
         validation_accuracy=float(joint_result.test_result["validation"]["multiclass_accuracy"]),
+        spec=joint_spec,
     )
 
     holdout = None
@@ -306,15 +389,18 @@ def run_continual(
         # kept so paired comparisons (McNemar, paired bootstrap) are possible.
         test_indices = np.flatnonzero(joint_masks["test"])
         holdout = {}
-        for name, model in (
-            ("frozen", frozen.model if frozen else None),
-            ("continual", champion.model if champion else None),
-            ("joint", joint.model),
-        ):
-            if model is None:
+        for name, arm in (("frozen", frozen), ("continual", champion), ("joint", joint)):
+            if arm is None or arm.model is None:
                 continue
+            arm_spec = arm.spec if getattr(arm, "spec", None) is not None else spec
+            arm_features, arm_labels, arm_dimension = features_for(
+                arm_spec, data_root, records, feature_cache
+            )
+            prepared_arm = _prepared(
+                arm_spec, records, arm_features, arm_labels, arm_dimension, joint_masks
+            )
             metrics, record_predictions, _, _ = evaluate_partition(
-                joint_prepared, model, "test", healthy_class_id=healthy
+                prepared_arm, arm.model, "test", healthy_class_id=healthy
             )
             holdout[name] = {
                 "accuracy": float(metrics["multiclass_accuracy"]),
@@ -338,6 +424,17 @@ def run_continual(
             "classifier": spec.classifier.algorithm,
         },
         "plan": plan_info,
+        "selection": {
+            "enabled": bool(select),
+            "budget_seconds": selection_budget if select else None,
+            "pool_size": len(selection_pool) if select else None,
+        },
+        "champion_configuration": None
+        if champion is None or getattr(champion, "spec", None) is None
+        else {
+            "feature": champion.spec.feature.method,
+            "classifier": champion.spec.classifier.algorithm,
+        },
         "criterion": criterion,
         "guard_tolerance": guard_tolerance,
         "min_gain": min_gain,
@@ -371,6 +468,10 @@ def run_continual(
     return summary
 
 
+def _fmt_metric(value) -> str:
+    return "—" if value is None else f"{float(value):.4f}"
+
+
 def _write_report(path: Path, summary: dict, trajectory: list[dict], holdout: dict | None) -> None:
     lines = [
         "# 持续学习运行报告",
@@ -392,7 +493,8 @@ def _write_report(path: Path, summary: dict, trajectory: list[dict], holdout: di
         decision = "promote" if row["promoted"] else "reject"
         lines.append(
             f"| {row['batch_id']} | {row['note']} | {row['training_records']} | "
-            f"{row['challenger_macro_f1']:.4f} | {row['champion_macro_f1']:.4f} | {decision} |"
+            f"{_fmt_metric(row['challenger_macro_f1'])} | "
+            f"{_fmt_metric(row['champion_macro_f1'])} | {decision} |"
         )
     lines.append("")
     lines.append("## 2. 判定理由")

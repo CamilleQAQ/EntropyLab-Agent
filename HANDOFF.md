@@ -488,6 +488,29 @@ continual 与 joint 完全相等（0.9593 = 0.9593）——但这是**构造性*
 不是优于联合重训。
 
 
+### V2 第二步：Agent 每轮重选候选（`docs/19`）
+
+- `continual/selection.py`：候选按预估提取秒数升序付费评估；同一特征方法只付一次
+  （同方法的第 2~6 个分类器免费）；候选必须过 guardrail，通过者里取 `gain_new` 最大；
+- champion 现在携带自己的 `spec`，holdout 按各臂自己的特征空间评估；
+- CLI：`--select --selection-budget 12`（默认池 78 个候选）。
+
+Paderborn，5 个独立划分：
+
+| 策略 | continual | 逐划分 gain | 胜率 |
+|---|---:|---:|---:|
+| V1：固定配置 + margin | 0.9028 ± 0.0354 | +0.0185 | 1/5 |
+| V2.1：固定配置 + guardrail | 0.9593 ± 0.0069 | +0.0750 | 5/5 |
+| **V2.2：选型 + guardrail** | **0.9880 ± 0.0195** | +0.0861 | **5/5** |
+
+agent 真的换了方法：锚点是 `FUSION_TIME`，4/5 个划分选了 `FUSION_TIME_SPEC`，
+1 个选了 `FUSION_ALL`；TSMEFuDE/MFE/RCMFuDE 从未被付费（预估 151–562 秒 ≫ 12 秒预算）。
+每轮实际付费 24–42 个候选，花费 8–11 秒。
+
+局限：continual 仍等于 joint（构造性）；初始轮按 54 条 validation 从 24 个候选里挑，
+存在赢家诅咒；预算只计提取、不计训练；frozen 的定义随选型改变，跨策略只能用 continual 列比。
+
+
 ### 作废结果，不要再引用
 
 - Aero-engine 二分类 69.7%：旧配置，不是论文 5 类协议；
@@ -615,7 +638,7 @@ v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、
    docs/09（v1.1）、docs/10（v1.2）、docs/11（L2 + test 协议）、docs/12（齿轮数据集）、
    docs/13（融合族）、docs/14（秒预算）、docs/15（CLI + 诊断入口）、docs/16（持续学习）、
-   docs/17（Paderborn 数据集）、docs/18（V2 决策层）
+   docs/17（Paderborn 数据集）、docs/18（V2 决策层）、docs/19（V2 选型）
 3. 用「完全权限」跑 295 tests（受限沙箱会挡住 pytest 临时目录）
 4. 检查 anchor / agent / ood 的 results/ 是否还在（三个数据集都有）
 5. 可视化 / 通道选择 / 找一个能支撑持续学习结论的新数据集
