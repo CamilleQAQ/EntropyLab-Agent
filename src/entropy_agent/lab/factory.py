@@ -269,9 +269,22 @@ def build(ctx: LabContext, candidate: Candidate, *, seeds: int = 3) -> dict:
     base_features = prepared.features.reshape(len(prepared.records), -1)
     combined = np.concatenate([base_features, sandbox.features], axis=1)
     metrics = evaluate_candidate(ctx, combined, seeds=seeds)
-    delta = metrics["macro_f1_mean"] - baseline["macro_f1_mean"]
-    threshold = 2 * max(metrics["macro_f1_std"], baseline["macro_f1_std"])
-    accepted = delta > threshold
+    # Paired comparison: both arms use the same split seeds, so the difficulty of
+    # each split cancels out and the comparison is far more sensitive than the
+    # difference of two independent means.
+    baseline_per_seed = np.asarray(
+        [row["macro_f1"] for row in baseline["per_seed"]], dtype=float
+    )
+    candidate_per_seed = np.asarray(metrics["per_seed"], dtype=float)
+    count = min(len(baseline_per_seed), len(candidate_per_seed))
+    per_seed_delta = candidate_per_seed[:count] - baseline_per_seed[:count]
+    delta = float(per_seed_delta.mean())
+    if count > 1:
+        standard_error = float(per_seed_delta.std(ddof=1) / np.sqrt(count))
+    else:
+        standard_error = float("inf")
+    threshold = 2 * standard_error
+    accepted = bool(np.isfinite(threshold) and delta > threshold)
     result = {
         "accepted": accepted,
         "stage": "evaluated",
@@ -287,7 +300,10 @@ def build(ctx: LabContext, candidate: Candidate, *, seeds: int = 3) -> dict:
         },
         "delta": round(float(delta), 6),
         "threshold": round(float(threshold), 6),
-        "problems": [] if accepted else ["叠加后提升没有超过 2 倍波动"],
+        "per_seed_delta": [round(float(value), 6) for value in per_seed_delta],
+        "problems": []
+        if accepted
+        else ["配对差值没有显著大于 0（没有超过 2 倍标准误）"],
     }
     if accepted:
         tools_dir = ctx.workspace / "lab_tools"
@@ -305,6 +321,7 @@ def build(ctx: LabContext, candidate: Candidate, *, seeds: int = 3) -> dict:
                 "macro_f1_std": metrics["macro_f1_std"],
                 "baseline_mean": baseline["macro_f1_mean"],
                 "delta": result["delta"],
+                "per_seed_delta": result["per_seed_delta"],
             }
         )
         registry.write_text(json.dumps(entries, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
