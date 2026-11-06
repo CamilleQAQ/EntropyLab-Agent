@@ -531,6 +531,19 @@ Paderborn，5 个划分：
 这一步证明动作机制可用、权衡可量化，但现规则不是最优的（改进方向见 `docs/20` §7）。
 
 
+### VBL 交叉验证 + 结果目录清理（2026-11-06）
+
+- 给 VBL 计划补上 probe（每轮到达数据 20% 永不训练），同一批 5 个划分对比判据：
+  margin 0.9830 vs guardrail 0.9840（几乎一致）；
+- 原因在决策日志里：VBL 的 `gain_new` 普遍为 0（同台架、同工况，没有可学增量），
+  guardrail 正确拒绝更新；其中 seed 2 r2 有 +2.1% 增益但 retention 掉 2.4%，
+  被 guardrail 拦下——判据按设计工作；
+- **结论修正**：V2 判据只在批次间存在真实漂移时有效（Paderborn +7.5 点），
+  无漂移时不会凭空造出提升；
+- 清理了 3 批废弃运行（adaptive / adaptive2 / 中途失败的 select），
+  并补上 `results/continual-paderborn-adaptive3-aggregate-20261106/summary.json`
+  （0.9713 ± 0.0225，5/5 胜出）。
+
 ### 作废结果，不要再引用
 
 - Aero-engine 二分类 69.7%：旧配置，不是论文 5 类协议；
