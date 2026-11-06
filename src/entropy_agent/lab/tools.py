@@ -58,6 +58,11 @@ class SearchNotesArgs(BaseModel):
     query: str = Field(description="what to look up, e.g. inner ring misclassification")
 
 
+class CustomExperimentArgs(BaseModel):
+    name: str = Field(description="name of a feature extractor registered by the factory")
+    seeds: int = Field(default=5, ge=1, le=10)
+
+
 def _method_spec(name: str):
     for method in DEFAULT_METHODS:
         if method.method == name:
@@ -240,6 +245,42 @@ def search_notes(ctx: LabContext, args: SearchNotesArgs) -> dict:
     return result
 
 
+def run_custom_experiment(ctx: LabContext, args: CustomExperimentArgs) -> dict:
+    """Train on the project features **plus** a factory-registered feature set."""
+    from .custom import load_code
+    from .factory import evaluate_candidate, run_in_sandbox, windows_of
+
+    started = time.perf_counter()
+    code = load_code(ctx.workspace, args.name)
+    windows = windows_of(ctx)
+    sandbox = run_in_sandbox(code, windows)
+    if not sandbox.ok:
+        result = {
+            "tool": "run_custom_experiment",
+            "feature": args.name,
+            "error": f"registered code failed: {sandbox.error[-200:]}",
+        }
+        ctx.experiments.append(result)
+        return result
+    prepared = prepare_dataset(ctx.spec, ctx.data_root)
+    base = prepared.features.reshape(len(prepared.records), -1)
+    combined = np.concatenate([base, sandbox.features], axis=1)
+    metrics = evaluate_candidate(ctx, combined, seeds=args.seeds)
+    result = {
+        "tool": "run_custom_experiment",
+        "feature": args.name,
+        "classifier": ctx.spec.classifier.algorithm,
+        "seeds": args.seeds,
+        "macro_f1_mean": metrics["macro_f1_mean"],
+        "macro_f1_std": metrics["macro_f1_std"],
+        "per_seed": metrics["per_seed"],
+        "seconds": round(time.perf_counter() - started, 2),
+    }
+    ctx.spent_seconds += result["seconds"]
+    ctx.experiments.append(result)
+    return result
+
+
 TOOL_SPECS = {
     "profile_dataset": {
         "description": "Read the dataset and return classes, counts, groups, window and sampling rate.",
@@ -260,6 +301,14 @@ TOOL_SPECS = {
         "description": "Search the project's method/data notes for evidence before proposing a hypothesis.",
         "args": SearchNotesArgs,
         "fn": search_notes,
+    },
+    "run_custom_experiment": {
+        "description": (
+            "Train on the project features PLUS a feature extractor registered by the factory "
+            "(use this after the factory registers a tool)."
+        ),
+        "args": CustomExperimentArgs,
+        "fn": run_custom_experiment,
     },
 }
 

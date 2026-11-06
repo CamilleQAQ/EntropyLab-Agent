@@ -11,6 +11,7 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 from . import grounding
+from .custom import catalogue as custom_catalogue
 from .ledger import Ledger
 from .llm import chat
 from .reviewer import review_experiment
@@ -23,6 +24,7 @@ class Action(BaseModel):
         "run_experiment",
         "analyze_errors",
         "search_notes",
+        "run_custom_experiment",
         "finish",
         "ask_human",
     ]
@@ -137,9 +139,17 @@ def build_graph(ctx: LabContext, llm=chat):
             + hint
             + "\nNever repeat the same tool with the same arguments twice."
         )
+        registered = custom_catalogue(ctx.workspace)
+        extra = ""
+        if registered:
+            names = ", ".join(item["name"] for item in registered)
+            extra = (
+                "\nRegistered custom feature extractors (usable with "
+                f"run_custom_experiment): {names}"
+            )
         raw = llm(
             [
-                {"role": "system", "content": SYSTEM_PROMPT + tool_catalogue()},
+                {"role": "system", "content": SYSTEM_PROMPT + tool_catalogue() + extra},
                 {"role": "user", "content": prompt},
             ]
         )

@@ -150,7 +150,7 @@ def run_in_sandbox(code: str, windows: np.ndarray, timeout: float = 30.0) -> San
         return SandboxResult(True, report, features)
 
 
-def _windows_of(ctx: LabContext) -> np.ndarray:
+def windows_of(ctx: LabContext) -> np.ndarray:
     records = load_dataset_records(ctx.spec, ctx.data_root)
     width = ctx.spec.window.size
     windows = []
@@ -258,7 +258,7 @@ def repair(llm, candidate: Candidate, error: str) -> Candidate:
 def build(
     ctx: LabContext, candidate: Candidate, *, seeds: int = 3, llm=None, retries: int = 1
 ) -> dict:
-    windows = _windows_of(ctx)
+    windows = windows_of(ctx)
     attempts: list[dict] = []
     sandbox = None
     for attempt in range(retries + 1):
