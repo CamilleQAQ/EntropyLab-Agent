@@ -54,6 +54,10 @@ def main() -> int:
     parser.add_argument("--margin", type=float, default=0.005)
     parser.add_argument("--dataset-id", default=None, help="override the dataset id from the manifest")
     parser.add_argument("--seed", type=int, default=20261104, help="shuffle units before allocating")
+    parser.add_argument(
+        "--probe-fraction", type=float, default=0.2,
+        help="share of each arriving round kept as never-trained probes",
+    )
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -62,6 +66,7 @@ def main() -> int:
     holdout: list[str] = []
     validation: list[str] = []
     rounds: dict[str, list[str]] = {"round0": [], "round1": [], "round2": []}
+    probes: dict[str, list[str]] = {"round0": [], "round1": [], "round2": []}
 
     for entry in manifest["classes"]:
         class_id = int(entry["class_id"])
@@ -85,14 +90,36 @@ def main() -> int:
             elif name == "validation":
                 validation.extend(groups)
             else:
-                rounds[name].extend(groups)
+                # Keep a slice of each arriving round as probes: these groups are
+                # never trained, so they can measure new-batch gain and retention.
+                if name in ("round1", "round2") and groups:
+                    probe_count = max(1, int(round(len(groups) * args.probe_fraction)))
+                    probes[name].extend(groups[:probe_count])
+                    rounds[name].extend(groups[probe_count:])
+                else:
+                    rounds[name].extend(groups)
 
     plan = BatchPlan(
         dataset_id=dataset_id,
         batches=(
-            Batch(batch_id=0, groups=tuple(rounds["round0"]), note="round 0 (initial)"),
-            Batch(batch_id=1, groups=tuple(rounds["round1"]), note="round 1"),
-            Batch(batch_id=2, groups=tuple(rounds["round2"]), note="round 2"),
+            Batch(
+                batch_id=0,
+                groups=tuple(rounds["round0"]),
+                note="round 0 (initial)",
+                probe_groups=tuple(probes["round0"]),
+            ),
+            Batch(
+                batch_id=1,
+                groups=tuple(rounds["round1"]),
+                note="round 1",
+                probe_groups=tuple(probes["round1"]),
+            ),
+            Batch(
+                batch_id=2,
+                groups=tuple(rounds["round2"]),
+                note="round 2",
+                probe_groups=tuple(probes["round2"]),
+            ),
         ),
         validation_groups=tuple(validation),
         holdout_groups=tuple(holdout),
@@ -104,7 +131,8 @@ def main() -> int:
     print(f"plan -> {args.output}")
     print(f"records: holdout {len(holdout)}, validation {len(validation)}, "
           f"round0 {len(rounds['round0'])}, round1 {len(rounds['round1'])}, "
-          f"round2 {len(rounds['round2'])}")
+          f"round2 {len(rounds['round2'])}; probes "
+          f"{len(probes['round0'])}/{len(probes['round1'])}/{len(probes['round2'])}")
     return 0
 
 
