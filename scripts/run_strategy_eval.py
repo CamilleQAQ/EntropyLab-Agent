@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from entropy_agent.io.dataset import load_dataset_records, load_dataset_spec  # noqa: E402
+from entropy_agent.lab.signals import feature_vector, signal_features  # noqa: E402
 from entropy_agent.lab.strategy import (  # noqa: E402
     DatasetProfile,
     aggregate,
@@ -36,12 +37,14 @@ def profile(name: str) -> DatasetProfile:
     records = load_dataset_records(spec, ROOT / data)
     labels = [record.label for record in records]
     counts = [labels.count(index) for index in range(len(spec.labels.names))]
+    stats = signal_features(spec, ROOT / data)
     return DatasetProfile(
         records=len(records),
         classes=len(spec.labels.names),
         sampling_rate=float(spec.sampling_rate_hz),
         window=int(spec.window.size),
         imbalance=round(max(counts) / max(min(counts), 1), 3),
+        signals=feature_vector(stats),
     )
 
 
@@ -57,6 +60,11 @@ def main() -> int:
     profiles = {name: profile(name) for name in table}
 
     report = evaluate(table, profiles, seconds)
+    print("signal statistics:")
+    for name, entry in report.items():
+        del entry
+    for name, profile_entry in profiles.items():
+        print(f"  {name:10s} signals {tuple(round(v, 3) for v in profile_entry.signals)}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps({"profiles": {k: vars(v) for k, v in profiles.items()}, "report": report},
@@ -64,11 +72,15 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    print(f"{'dataset':11s} {'best':>6s} {'fixed@1':>8s} {'learned@1':>10s} {'random@1':>9s} {'learned_top1':>40s}")
+    print(
+        f"{'dataset':11s} {'best':>6s} {'fixed@1':>8s} {'learned@1':>10s} {'safe@1':>8s} "
+        f"{'random@1':>9s} {'learned_top1':>40s}"
+    )
     for name, entry in report.items():
         print(
             f"{name:11s} {entry['best_possible']:6.4f} {entry['fixed@1']:8.4f} "
-            f"{entry['learned@1']:10.4f} {entry['random@1']:9.4f}  {entry['learned_top1']}"
+            f"{entry['learned@1']:10.4f} {entry['safe@1']:8.4f} {entry['random@1']:9.4f}  "
+            f"{entry['learned_top1']}"
         )
     mean = lambda key: sum(entry[key] for entry in report.values()) / len(report)
     print()
@@ -76,6 +88,7 @@ def main() -> int:
         print(
             f"mean regret@{k}: fixed {mean(f'regret_fixed@{k}'):.4f} | "
             f"learned {mean(f'regret_learned@{k}'):.4f} | "
+            f"safe {mean(f'regret_safe@{k}'):.4f} | "
             f"random {mean(f'regret_random@{k}'):.4f}"
         )
     print(f"\nsummary -> {args.output}")

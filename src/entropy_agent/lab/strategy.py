@@ -55,6 +55,8 @@ class DatasetProfile:
     sampling_rate: float
     window: int
     imbalance: float
+    # Optional signal statistics (kurtosis, rms, centroid, band ratio, fisher).
+    signals: tuple[float, ...] = ()
 
 
 def load_grid(path: Path) -> list[dict]:
@@ -92,6 +94,7 @@ def build_vectors(
     candidates: list[tuple[str, str]],
 ) -> np.ndarray:
     profile = profiles[dataset]
+    signal_values = list(profile.signals)
     rows = []
     for feature, classifier in candidates:
         numeric = [
@@ -104,13 +107,17 @@ def build_vectors(
         feature_hot = [1.0 if feature == name else 0.0 for name in FEATURES]
         classifier_hot = [1.0 if classifier == name else 0.0 for name in CLASSIFIERS]
         # Interactions let a linear model learn rules such as
-        # "high sampling rate favours this feature family".
+        # "high sampling rate favours this feature family".  The same applies to
+        # the signal statistics: they are what actually predicts the winner.
         interactions = [
-            value * flag for value in numeric for flag in feature_hot + classifier_hot
+            value * flag
+            for value in numeric + signal_values
+            for flag in feature_hot + classifier_hot
         ]
         rows.append(
             [
                 *numeric,
+                *signal_values,
                 *feature_hot,
                 *classifier_hot,
                 math.log1p(seconds.get((feature, classifier), 1.0)),
@@ -163,8 +170,10 @@ def evaluate(
     ks: tuple[int, ...] = (1, 2, 3),
     random_trials: int = 500,
     seed: int = 0,
+    safe_margin: float = 0.25,
 ) -> dict:
     rng = np.random.default_rng(seed)
+    anchor = ("FUSION_TIME", "EXTRA-TREES")
     report: dict[str, dict] = {}
     for holdout in table:
         predicted = fit_predict(table, profiles, seconds, holdout)
@@ -172,6 +181,13 @@ def evaluate(
         truth = table[holdout]
         available = [candidate for candidate in FIXED_ORDER if candidate in truth]
         fixed = available + [candidate for candidate in truth if candidate not in available]
+        # Conservative policy: keep the anchor unless the model is clearly more
+        # confident about another candidate.  Worst case it degrades to `fixed`.
+        if learned[0] == anchor or anchor not in predicted:
+            safe = list(learned)
+        else:
+            margin = predicted[learned[0]] - predicted[anchor]
+            safe = list(learned) if margin > safe_margin else list(fixed)
         random_regret = {k: [] for k in ks}
         for _ in range(random_trials):
             shuffled = [truth[candidate] for candidate in truth]
@@ -183,11 +199,14 @@ def evaluate(
             "best_possible": round(max(truth.values()), 4),
             "fixed@1": round(truth[fixed[0]], 4),
             "learned@1": round(truth[learned[0]], 4),
+            "safe@1": round(truth[safe[0]], 4),
             "random@1": round(float(np.mean(random_regret[1])), 4),
             "learned_top1": learned[0],
+            "safe_top1": safe[0],
         }
         for k in ks:
             entry[f"regret_learned@{k}"] = round(regret_at_k(learned, truth, k), 4)
+            entry[f"regret_safe@{k}"] = round(regret_at_k(safe, truth, k), 4)
             entry[f"regret_fixed@{k}"] = round(regret_at_k(fixed, truth, k), 4)
             entry[f"regret_random@{k}"] = round(float(np.mean(random_regret[k])), 4)
         report[holdout] = entry
