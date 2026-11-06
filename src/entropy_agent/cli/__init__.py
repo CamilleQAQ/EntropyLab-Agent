@@ -138,6 +138,7 @@ def _cmd_agent_run(args: argparse.Namespace) -> int:
 
 def _cmd_continual_run(args: argparse.Namespace) -> int:
     from ..agent.candidates import build_pool
+    from ..continual.search_policy import SearchPolicy
     from ..continual import BatchPlan, run_continual
 
     spec = load_dataset_spec(args.spec)
@@ -155,6 +156,13 @@ def _cmd_continual_run(args: argparse.Namespace) -> int:
         select=args.select,
         selection_budget=args.selection_budget,
         pool=build_pool() if args.select else None,
+        search_policy=(
+            SearchPolicy.adaptive(
+                min_lead=args.stop_lead, patience=args.stop_patience
+            )
+            if args.search_policy == "adaptive"
+            else SearchPolicy()
+        ),
     )
     print(f"plan         : {args.plan}")
     print(f"batches      : {summary['plan']['groups']['batches']}")
@@ -177,7 +185,8 @@ def _cmd_continual_run(args: argparse.Namespace) -> int:
         champion = summary.get("champion_configuration") or {}
         print(
             f"selection    : pool {summary['selection']['pool_size']}, budget "
-            f"{summary['selection']['budget_seconds']:.1f}s/round, final "
+            f"{summary['selection']['budget_seconds']:.1f}s/round, "
+            f"policy {summary['selection']['search_policy']['enabled']}, final "
             f"{champion.get('feature', '—')} + {champion.get('classifier', '—')}"
         )
     print(f"report       : {Path(args.output) / 'report.md'}")
@@ -449,6 +458,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="V2 step 2: let the agent re-select the feature family and classifier each round",
     )
     continual_run.add_argument("--selection-budget", type=float, default=12.0)
+    continual_run.add_argument(
+        "--search-policy", choices=("full", "adaptive"), default="full",
+        help="full: spend the whole budget; adaptive: stop on lead/patience",
+    )
+    continual_run.add_argument("--stop-lead", type=float, default=0.02)
+    continual_run.add_argument("--stop-patience", type=int, default=6)
     continual_run.set_defaults(handler=_cmd_continual_run)
 
     # -- inspect ---------------------------------------------------------

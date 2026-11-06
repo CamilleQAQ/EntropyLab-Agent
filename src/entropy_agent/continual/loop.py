@@ -32,6 +32,7 @@ from ..training.pipeline import (
 )
 from .decision import Decision, decide
 from .plan import BatchPlan
+from .search_policy import SearchPolicy
 from .selection import _feature_key, features_for, select_and_train
 
 
@@ -137,6 +138,7 @@ def run_continual(
     selection_budget: float = 12.0,
     pool=None,
     cost_model: CostModel | None = None,
+    search_policy: SearchPolicy | None = None,
 ) -> dict:
     if plan.dataset_id != spec.dataset_id:
         raise ValueError(
@@ -178,6 +180,7 @@ def run_continual(
     feature_cache: dict = {}
     feature_cache[_feature_key(spec)] = (features, labels, dimension)
     selection_pool = tuple(pool) if pool is not None else ()
+    method_memory: dict[str, float] = {}
     selection_cost_model = cost_model if cost_model is not None else CostModel()
     windows_per_unit = len(records) * spec.window.windows_per_record
 
@@ -207,6 +210,8 @@ def run_continual(
                 min_gain=min_gain,
                 margin=plan.margin,
                 feature_cache=feature_cache,
+                policy=search_policy,
+                method_memory=method_memory,
             )
             challenger = {
                 "model_id": selection.model_id,
@@ -220,6 +225,8 @@ def run_continual(
             probe_scores = {
                 "candidates": [outcome.__dict__ for outcome in selection.outcomes],
                 "spent_seconds": round(selection.spent_seconds, 3),
+                "evaluated": selection.evaluated,
+                "stop_reason": selection.stop_reason,
                 "skipped": selection.skipped,
             }
             promoted = selection.model is not None
@@ -428,6 +435,9 @@ def run_continual(
             "enabled": bool(select),
             "budget_seconds": selection_budget if select else None,
             "pool_size": len(selection_pool) if select else None,
+            "search_policy": (
+                (search_policy or SearchPolicy()).as_dict() if select else None
+            ),
         },
         "champion_configuration": None
         if champion is None or getattr(champion, "spec", None) is None

@@ -511,6 +511,26 @@ agent 真的换了方法：锚点是 `FUSION_TIME`，4/5 个划分选了 `FUSION
 存在赢家诅咒；预算只计提取、不计训练；frozen 的定义随选型改变，跨策略只能用 continual 列比。
 
 
+### V2 第三步：预算动作（`docs/20`）
+
+- `continual/search_policy.py`：两条停止规则（lead / patience）+ 最小候选数；
+- `selection.py`：agent 每评估完一个候选就决策"继续还是停"，`stop_reason` 入日志；
+- **method memory**：每轮记住哪个方法拿到多少 gain，下一轮优先试它
+  （没有它早停会退化成 frozen，可复现）；
+- CLI：`--search-policy full|adaptive --stop-lead 0.02 --stop-patience 6`。
+
+Paderborn，5 个划分：
+
+| 策略 | holdout continual | 候选总数 | 提取秒数 |
+|---|---:|---:|---:|
+| 全量搜索（V2.2） | **0.9880 ± 0.0195** | 102 | 27.6 s |
+| 自适应停止（V2.3） | 0.9713 ± 0.0225 | 43.2 | 13.6 s |
+
+**成本减半、精度掉 1.7 点。** 根因可定位：最优候选（FUSION_TIME_SPEC）常出现在
+第一个可行候选之后，"clear lead" 规则看不到后面更好的候选。
+这一步证明动作机制可用、权衡可量化，但现规则不是最优的（改进方向见 `docs/20` §7）。
+
+
 ### 作废结果，不要再引用
 
 - Aero-engine 二分类 69.7%：旧配置，不是论文 5 类协议；
@@ -638,7 +658,8 @@ v1.1 已解决、v1.2 已解决记账问题；剩下的见 §10。
 2. 读 docs/05（aero）、docs/06（triaxial）、docs/07（v1）、docs/08（OOD）、
    docs/09（v1.1）、docs/10（v1.2）、docs/11（L2 + test 协议）、docs/12（齿轮数据集）、
    docs/13（融合族）、docs/14（秒预算）、docs/15（CLI + 诊断入口）、docs/16（持续学习）、
-   docs/17（Paderborn 数据集）、docs/18（V2 决策层）、docs/19（V2 选型）
+   docs/17（Paderborn 数据集）、docs/18（V2 决策层）、docs/19（V2 选型）、
+   docs/20（V2 预算动作）
 3. 用「完全权限」跑 295 tests（受限沙箱会挡住 pytest 临时目录）
 4. 检查 anchor / agent / ood 的 results/ 是否还在（三个数据集都有）
 5. 可视化 / 通道选择 / 找一个能支撑持续学习结论的新数据集

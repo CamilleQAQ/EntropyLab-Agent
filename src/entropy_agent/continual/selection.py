@@ -31,6 +31,7 @@ from ..training.pipeline import (
     train_dataset,
 )
 from .decision import decide
+from .search_policy import SearchPolicy, SearchState, should_stop
 
 
 @dataclass
@@ -59,6 +60,8 @@ class SelectionResult:
     selected: SelectionOutcome | None = None
     skipped: list[dict] = field(default_factory=list)
     spent_seconds: float = 0.0
+    evaluated: int = 0
+    stop_reason: str = "budget exhausted"
 
 
 def candidate_spec(spec: DatasetSpec, candidate: Candidate) -> DatasetSpec:
@@ -167,6 +170,8 @@ def select_and_train(
     min_gain: float,
     margin: float,
     feature_cache: dict,
+    policy: SearchPolicy | None = None,
+    method_memory: dict[str, float] | None = None,
 ) -> SelectionResult:
     """Try candidates cheapest-first until the budget runs out; return the best commit.
 
@@ -178,9 +183,13 @@ def select_and_train(
     ledger = BudgetLedger(budget_seconds)
     result = SelectionResult()
 
+    memory = method_memory if method_memory is not None else {}
+    # Methods that paid off in earlier rounds are tried first; the rest stay in
+    # cost order so the cheap exploration still happens.
     ordered = sorted(
         enumerate(pool),
         key=lambda item: (
+            -memory.get(item[1].method.method, 0.0),
             cost_model.estimate(item[1].method.method, windows),
             item[0],
         ),
@@ -205,6 +214,9 @@ def select_and_train(
         )
 
     evaluated: list[dict] = []
+    gains: list[float] = []
+    no_improve = 0
+    search_policy = policy if policy is not None else SearchPolicy()
     for position, (_index, candidate) in enumerate(ordered):
         spec_c = candidate_spec(spec, candidate)
         # Feature extraction is charged once per (method, parameters); a second
@@ -304,6 +316,34 @@ def select_and_train(
         entry["outcome"] = outcome
         evaluated.append(entry)
 
+        if champion is not None and entry.get("feasible") is True:
+            gain = entry["gain_new"]
+            if not gains or gain > max(gains):
+                no_improve = 0
+            else:
+                no_improve += 1
+            gains.append(float(gain))
+        elif champion is not None:
+            no_improve += 1
+
+        if champion is not None and search_policy.enabled:
+            ordered_gains = sorted(gains, reverse=True)
+            best_gain = ordered_gains[0] if ordered_gains else None
+            runner_up = ordered_gains[1] if len(ordered_gains) > 1 else None
+            decision = should_stop(
+                SearchState(
+                    evaluated=len(evaluated),
+                    best_gain=best_gain,
+                    runner_up_gain=runner_up,
+                    no_improve=no_improve,
+                    remaining_seconds=ledger.remaining,
+                ),
+                search_policy,
+            )
+            if decision.stop:
+                result.stop_reason = decision.reason
+                break
+
         remaining = []
         for rest_position in range(position + 1, len(ordered)):
             rest = ordered[rest_position][1]
@@ -356,4 +396,28 @@ def select_and_train(
     result.probe_scores = best["scores"]
     result.selected = best.get("outcome")
     result.spent_seconds = ledger.spent_seconds
+    result.evaluated = len(evaluated)
+    if champion is None:
+        # The initial round has no champion, so there is no gain to remember.
+        # Rank methods by how far they fell short of the round's best validation
+        # score (<= 0), which makes the best method sort first next round.
+        scored = [
+            outcome.validation_macro_f1
+            for outcome in result.outcomes
+            if outcome.validation_macro_f1 is not None
+        ]
+        best_validation = max(scored) if scored else None
+        if best_validation is not None:
+            for outcome in result.outcomes:
+                if outcome.validation_macro_f1 is None:
+                    continue
+                score = float(outcome.validation_macro_f1) - float(best_validation)
+                previous = memory.get(outcome.method, -1.0)
+                memory[outcome.method] = max(previous, score)
+    else:
+        for outcome in result.outcomes:
+            if outcome.gain_new is None:
+                continue
+            previous = memory.get(outcome.method, 0.0)
+            memory[outcome.method] = max(previous, float(outcome.gain_new))
     return result
