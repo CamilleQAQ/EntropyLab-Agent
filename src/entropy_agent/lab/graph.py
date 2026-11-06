@@ -10,6 +10,7 @@ from typing import Literal, TypedDict
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
+from . import grounding
 from .ledger import Ledger
 from .llm import chat
 from .reviewer import review_experiment
@@ -47,6 +48,7 @@ class LabState(TypedDict, total=False):
     baseline: dict | None
     status: str
     report: str
+    hypothesis_problems: list[str]
 
 
 SYSTEM_PROMPT = """You are the Research Director of an autonomous bearing-diagnosis lab.
@@ -60,6 +62,14 @@ Rules:
 - A "claim" is only allowed when the difference exceeds twice the split variation.
 - When evidence is exhausted or the budget is nearly spent, call finish.
 - Never invent numbers: every number you mention must come from a tool result.
+- Never repeat an experiment that already ran: pick a feature/classifier pair that
+  has not been tried, otherwise the call is rejected as REPEATED_ACTION.
+- "hypothesis" must be at most two sentences and follow this shape:
+  "观察到 <工具返回的具体数字>，因此预计 <可检验的变化>，用 <检验方式> 验证。"
+  A hypothesis that cites a number you did not see in the history is rejected and
+  you will be asked to rewrite it.
+  Example: "观察到 INNER_RING recall 0.42、OR->IR 混淆 12 例，因此预计加入包络特征后
+  INNER_RING recall 提升到 0.6 以上，用 5 个划分的均值对比验证。"
 
 Tools:
 """
@@ -68,7 +78,9 @@ Tools:
 def _compact(history: list[dict]) -> str:
     lines = []
     for item in history[-8:]:
-        if item.get("tool") == "run_experiment":
+        if item.get("error"):
+            lines.append(f"- {item['tool']} FAILED: {item['error'][:120]}")
+        elif item.get("tool") == "run_experiment" and "macro_f1_mean" in item:
             lines.append(
                 f"- run_experiment {item['feature']}+{item['classifier']} seeds={item['seeds']} "
                 f"macro_f1={item['macro_f1_mean']:.4f}+-{item['macro_f1_std']:.4f}"
@@ -85,8 +97,6 @@ def _compact(history: list[dict]) -> str:
                 f"- profile: records={item['records']} classes={len(item['classes'])} "
                 f"groups={item['groups']}"
             )
-        elif item.get("error"):
-            lines.append(f"- {item['tool']} FAILED: {item['error'][:120]}")
         elif item.get("tool") == "review":
             lines.append(f"- reviewer: {item['verdict']} {[f['code'] for f in item['findings']]}")
     return "\n".join(lines) or "(no experiments yet)"
@@ -134,14 +144,45 @@ def build_graph(ctx: LabContext, llm=chat):
             ]
         )
         action = _parse_action(raw)
+        hypothesis_problems = (
+            grounding.problems(action.hypothesis, history) if action.hypothesis else []
+        )
+        if hypothesis_problems:
+            repair = (
+                "Your hypothesis was rejected by the grounding check: "
+                f"{hypothesis_problems}. Rewrite the SAME action, keeping the same "
+                "tool and arguments, with a hypothesis that cites only numbers that "
+                "appear in the history below.\n"
+                + _compact(history)
+            )
+            try:
+                repaired = _parse_action(
+                    llm(
+                        [
+                            {"role": "system", "content": SYSTEM_PROMPT + tool_catalogue()},
+                            {"role": "user", "content": repair},
+                        ]
+                    )
+                )
+                if not grounding.problems(repaired.hypothesis, history):
+                    repaired.action = action.action
+                    repaired.args = action.args
+                    action = repaired
+                    hypothesis_problems = []
+            except Exception:
+                pass
         if action.hypothesis:
-            ledger.record_hypothesis(state.get("rounds", 0) + 1, action.hypothesis, action.reason)
+            evidence = action.reason
+            if hypothesis_problems:
+                evidence = f"{evidence} | 未通过校验: {hypothesis_problems}"
+            ledger.record_hypothesis(state.get("rounds", 0) + 1, action.hypothesis, evidence)
         return {
             "action": action.model_dump(),
             "hypothesis": action.hypothesis,
             "claim": action.claim,
             "rounds": state.get("rounds", 0) + 1,
             "status": "planned" if action.action not in {"finish", "ask_human"} else action.action,
+            "hypothesis_problems": hypothesis_problems,
         }
 
     def execute(state: LabState) -> LabState:
@@ -202,19 +243,22 @@ def build_graph(ctx: LabContext, llm=chat):
             "",
         ]
         for item in state.get("history", []):
-            if item.get("tool") == "run_experiment":
+            if item.get("error"):
+                lines.append(f"- {item['tool']} 失败：{item['error'][:120]}")
+            elif item.get("tool") == "run_experiment" and "macro_f1_mean" in item:
                 lines.append(
                     f"- `{item['feature']}+{item['classifier']}`：macro-F1 "
                     f"{item['macro_f1_mean']:.4f} ± {item['macro_f1_std']:.4f}（{item['seeds']} 划分）"
                 )
-            elif item.get("error"):
-                lines.append(f"- {item['tool']} 失败：{item['error'][:120]}")
             elif item.get("tool") == "review":
                 codes = [finding["code"] for finding in item["findings"]]
                 lines.append(f"- 审查：{item['verdict']} {codes}")
         lines += ["", "## 假设", ""]
         for row in ledger.hypotheses():
-            lines.append(f"- 第 {row['round']} 轮：{row['text']}（依据：{row['evidence']}）")
+            flag = " ⚠" if "未通过校验" in (row["evidence"] or "") else ""
+            lines.append(
+                f"- 第 {row['round']} 轮：{row['text']}（依据：{row['evidence']}）{flag}"
+            )
         lines += [
             "",
             "## 局限",

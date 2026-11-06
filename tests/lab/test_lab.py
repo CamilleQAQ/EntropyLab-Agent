@@ -59,13 +59,13 @@ def test_lab_loop_profiles_then_retries_with_enough_seeds(tiny_dataset, tmp_path
         _action(
             action="run_experiment",
             args={"feature": "MDE", "classifier": "SVM-RBF", "seeds": 1},
-            hypothesis="MDE is enough",
+            hypothesis="预计 MDE 足够稳定，用划分验证。",
             reason="cheap first",
         ),
         _action(
             action="run_experiment",
             args={"feature": "MDE", "classifier": "SVM-RBF", "seeds": 5},
-            hypothesis="MDE is enough",
+            hypothesis="预计 MDE 足够稳定，用划分验证。",
             reason="reviewer asked for more splits",
         ),
         _action(action="finish", reason="budget spent"),

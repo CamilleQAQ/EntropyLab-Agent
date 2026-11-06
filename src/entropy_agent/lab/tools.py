@@ -185,7 +185,10 @@ def analyze_errors(ctx: LabContext, args: AnalyzeErrorsArgs) -> dict:
     truth = prepared.labels[prepared.masks["validation"]]
     names = list(seeded.labels.names)
     matrix = confusion_matrix(truth, predictions, labels=range(len(names))).tolist()
-    per_class = metrics.get("per_class_recall", {})
+    per_class = {
+        name: (round(matrix[i][i] / sum(matrix[i]), 4) if sum(matrix[i]) else None)
+        for i, name in enumerate(names)
+    }
     pairs = []
     for i, name_i in enumerate(names):
         for j, name_j in enumerate(names):

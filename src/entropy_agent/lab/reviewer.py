@@ -13,6 +13,11 @@ MAX_STD = 0.02
 
 def review_experiment(result: dict, baseline: dict | None, claim: str) -> dict:
     findings: list[dict] = []
+    if result.get("error"):
+        return {
+            "verdict": "revise",
+            "findings": [{"code": "TOOL_FAILED", "detail": str(result["error"])[:160]}],
+        }
     if result.get("tool") != "run_experiment":
         return {"verdict": "accept", "findings": findings}
 
