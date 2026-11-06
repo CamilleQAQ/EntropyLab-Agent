@@ -193,6 +193,32 @@ def _cmd_continual_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_lab_run(args: argparse.Namespace) -> int:
+    from ..lab import LabContext, run_lab
+
+    spec = load_dataset_spec(args.spec)
+    ctx = LabContext(
+        spec=spec,
+        data_root=args.data_root,
+        workspace=args.output,
+        goal=args.goal,
+        budget_seconds=args.budget,
+    )
+    summary = run_lab(ctx, goal=args.goal, max_rounds=args.max_rounds)
+    print(f"status       : {summary['status']}")
+    print(f"rounds       : {summary['rounds']}")
+    print(f"spent        : {summary['spent_seconds']} s")
+    print(f"hypotheses   : {len(summary['hypotheses'])}")
+    for row in summary["hypotheses"]:
+        print(f"  - r{row['round']}: {row['text'][:70]}")
+    print(f"experiments  : {len(summary['experiments'])}")
+    for review in summary["reviews"]:
+        codes = [f["code"] for f in review["findings"]]
+        print(f"  review r{review['round']}: {review['verdict']} {codes}")
+    print(f"report       : {summary['report']}")
+    return 0
+
+
 def _registry(args: argparse.Namespace):
     from ..diagnosis import ModelRegistry
 
@@ -465,6 +491,18 @@ def _build_parser() -> argparse.ArgumentParser:
     continual_run.add_argument("--stop-lead", type=float, default=0.02)
     continual_run.add_argument("--stop-patience", type=int, default=6)
     continual_run.set_defaults(handler=_cmd_continual_run)
+
+    # -- lab -------------------------------------------------------------
+    lab = sub.add_parser("lab", help="autonomous research lab")
+    lab_sub = lab.add_subparsers(dest="lab_command", required=True)
+    lab_run = lab_sub.add_parser("run", help="run the plan/execute/review loop")
+    lab_run.add_argument("--spec", type=Path, required=True)
+    lab_run.add_argument("--data-root", type=Path, required=True)
+    lab_run.add_argument("--output", type=Path, required=True)
+    lab_run.add_argument("--goal", required=True)
+    lab_run.add_argument("--max-rounds", type=int, default=6)
+    lab_run.add_argument("--budget", type=float, default=600.0, help="seconds")
+    lab_run.set_defaults(handler=_cmd_lab_run)
 
     # -- inspect ---------------------------------------------------------
     inspect = sub.add_parser("inspect", help="describe a signal file's columns/arrays")

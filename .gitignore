@@ -8,3 +8,6 @@ __pycache__/
 pytest-cache-files-*/
 tmp/
 models/
+.env
+data-sources/
+.pytest-tmp/
