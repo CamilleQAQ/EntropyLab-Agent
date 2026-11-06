@@ -234,7 +234,7 @@ def _cmd_lab_factory(args: argparse.Namespace) -> int:
     candidate = propose(chat, args.goal)
     print(f"proposal     : {candidate.name}")
     print(f"rationale    : {candidate.rationale[:120]}")
-    result = build(ctx, candidate, seeds=args.seeds)
+    result = build(ctx, candidate, seeds=args.seeds, llm=chat)
     print(f"stage        : {result['stage']}")
     print(f"accepted     : {result['accepted']}")
     if result.get("metrics"):

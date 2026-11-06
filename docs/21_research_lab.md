@@ -74,7 +74,7 @@ python -m entropy_agent.cli lab run `
 
 - 假设质量已通过「接地检查 + 重写」改善，但仍会出现泛泛而谈的表述；
 - 每轮重新提取特征，实验成本高（Paderborn 一次 5 划分约 19 秒）；
-- 工具工厂已能生成/验证/注册新特征，但注册结果尚未接回实验循环；
+- 工具工厂已注册 1 个新特征（CWRU），但注册结果尚未接回实验循环；
 - 没有跨数据集策略学习（下一步）。
 
 ## 5b. 工具工厂（LLM 自己写特征提取器）
@@ -133,6 +133,36 @@ python -m entropy_agent.cli lab factory `
   --output results/lab-paderborn-20261106 `
   --goal "为外圈/内圈混淆设计一个多特征提取器" --seeds 5
 ```
+
+## 5c. CWRU 数据集与一次成功的工具注册
+
+齿轮数据集只有 37 个独立组，划分方差把任何真实提升都吃掉了，所以工厂换到
+**CWRU**（12k 驱动端）：
+
+| 项 | 值 |
+|---|---|
+| 类别 | NORMAL / BALL / INNER_RACE / OUTER_RACE |
+| 文件 | 64 个录制（正常 4、球 16、内圈 16、外圈 28） |
+| 记录 | 每个文件 6 个 2048 点窗口 → 384 条 |
+| 组 | 每个文件一组（64 组） |
+| 采样率 | 12 kHz |
+| 基线（FUSION_TIME + ExtraTrees，5 划分） | **0.9571 ± 0.0388** |
+
+适配器：`scripts/prepare_cwru_4class.py`；配置：`configs/cwru_4class_fusion_time_extratrees.py.json`。
+
+### 一次真实的「生成 → 失败 → 自我修复 → 注册」
+
+1. LLM 生成 `envelope_spectral_kurtosis_features`；
+2. 沙箱执行失败：`scipy.signal.butter` 的截止频率按归一化频率传入，`fs` 默认 1.0 →
+   `ValueError: 0 < Wn < fs/2`；
+3. **修复循环**把报错回给 LLM，它修正后重新提交；
+4. 契约测试通过（形状、有限值、确定性、非常量）；
+5. 配对评估：叠加后 **0.9715 ± 0.0302** vs 基线 0.9571 ± 0.0388，
+   配对差值 **+0.0144**，阈值 0.0089 → **通过**；
+6. 注册到 `results/lab-cwru-20261106/lab_tools/envelope_spectral_kurtosis_features.py`，
+   `registry.json` 记录指标与逐划分差值 `[+0.026, +0.021, +0.011, +0.014, 0.000]`。
+
+这是整个项目里**第一个由 LLM 生成、经沙箱与配对评估后注册成功的工具**。
 
 ## 6. 测试
 

@@ -230,15 +230,65 @@ def propose(llm, goal: str, history: str = "") -> Candidate:
     return Candidate.model_validate(json.loads(text))
 
 
-def build(ctx: LabContext, candidate: Candidate, *, seeds: int = 3) -> dict:
-    problems = validate_code(candidate.code)
-    if problems:
-        return {"accepted": False, "stage": "static", "problems": problems}
+REPAIR_PROMPT = """Your feature extractor failed when executed. Fix it.
+Return the SAME JSON shape: {"name": "...", "rationale": "...", "code": "..."}.
+Keep the signature `def extract(windows)`; only numpy/scipy/math; no labels,
+no file access. Make sure the code runs on windows of shape (n, 2048) with
+12 kHz sampling when you use frequency-based filters.
+"""
 
+
+def repair(llm, candidate: Candidate, error: str) -> Candidate:
+    raw = llm(
+        [
+            {"role": "system", "content": REPAIR_PROMPT},
+            {
+                "role": "user",
+                "content": f"Code:\n{candidate.code}\n\nError:\n{error[:800]}",
+            },
+        ]
+    )
+    text = raw.strip().strip("`")
+    if text.startswith("json"):
+        text = text[4:]
+    fixed = Candidate.model_validate(json.loads(text))
+    return fixed
+
+
+def build(
+    ctx: LabContext, candidate: Candidate, *, seeds: int = 3, llm=None, retries: int = 1
+) -> dict:
     windows = _windows_of(ctx)
-    sandbox = run_in_sandbox(candidate.code, windows)
-    if not sandbox.ok:
-        return {"accepted": False, "stage": "sandbox", "problems": [sandbox.error]}
+    attempts: list[dict] = []
+    sandbox = None
+    for attempt in range(retries + 1):
+        problems = validate_code(candidate.code)
+        if problems:
+            return {
+                "accepted": False,
+                "stage": "static",
+                "problems": problems,
+                "attempts": attempts,
+            }
+        sandbox = run_in_sandbox(candidate.code, windows)
+        attempts.append(
+            {
+                "attempt": attempt,
+                "ok": sandbox.ok,
+                "error": None if sandbox.ok else sandbox.error[-300:],
+            }
+        )
+        if sandbox.ok:
+            break
+        if llm is not None and attempt < retries:
+            candidate = repair(llm, candidate, sandbox.error)
+    if sandbox is None or not sandbox.ok:
+        return {
+            "accepted": False,
+            "stage": "sandbox",
+            "problems": [sandbox.error if sandbox else "no attempt"],
+            "attempts": attempts,
+        }
     report = sandbox.report
     if report["shape"][0] != len(windows) or len(report["shape"]) != 2:
         return {
@@ -301,6 +351,7 @@ def build(ctx: LabContext, candidate: Candidate, *, seeds: int = 3) -> dict:
         "delta": round(float(delta), 6),
         "threshold": round(float(threshold), 6),
         "per_seed_delta": [round(float(value), 6) for value in per_seed_delta],
+        "attempts": attempts,
         "problems": []
         if accepted
         else ["配对差值没有显著大于 0（没有超过 2 倍标准误）"],
