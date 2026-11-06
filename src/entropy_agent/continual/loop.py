@@ -123,6 +123,7 @@ def run_continual(
     criterion: str = "margin",
     guard_tolerance: float = 0.02,
     min_gain: float = 0.0,
+    features_bundle: tuple | None = None,
 ) -> dict:
     if plan.dataset_id != spec.dataset_id:
         raise ValueError(
@@ -131,11 +132,15 @@ def run_continual(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    records = load_dataset_records(spec, data_root)
-    plan_info = plan.validate(records)
-    records, features, labels, dimension = extract_features(
-        spec, data_root, records=records
-    )
+    if features_bundle is None:
+        records = load_dataset_records(spec, data_root)
+        plan_info = plan.validate(records)
+        records, features, labels, dimension = extract_features(
+            spec, data_root, records=records
+        )
+    else:
+        records, features, labels, dimension = features_bundle
+        plan_info = plan.validate(records)
     labels = np.asarray(labels, dtype=np.int64)
     healthy = spec.labels.healthy_class_id
 
