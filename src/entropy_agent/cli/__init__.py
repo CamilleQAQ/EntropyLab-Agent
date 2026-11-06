@@ -219,6 +219,41 @@ def _cmd_lab_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_lab_factory(args: argparse.Namespace) -> int:
+    from ..lab import LabContext, chat
+    from ..lab.factory import build, propose
+
+    spec = load_dataset_spec(args.spec)
+    ctx = LabContext(
+        spec=spec,
+        data_root=args.data_root,
+        workspace=args.output,
+        goal=args.goal,
+        budget_seconds=args.budget,
+    )
+    candidate = propose(chat, args.goal)
+    print(f"proposal     : {candidate.name}")
+    print(f"rationale    : {candidate.rationale[:120]}")
+    result = build(ctx, candidate, seeds=args.seeds)
+    print(f"stage        : {result['stage']}")
+    print(f"accepted     : {result['accepted']}")
+    if result.get("metrics"):
+        metrics = result["metrics"]
+        baseline = result["baseline"]
+        print(
+            f"candidate    : {metrics['macro_f1_mean']:.4f} ± {metrics['macro_f1_std']:.4f}"
+        )
+        print(
+            f"baseline     : {baseline['macro_f1_mean']:.4f} ± {baseline['macro_f1_std']:.4f}"
+        )
+        print(f"delta        : {result['delta']:+.4f} (needs > {result['threshold']:.4f})")
+    for problem in result.get("problems") or []:
+        print(f"problem      : {problem}")
+    if result.get("registered"):
+        print(f"registered   : {result['registered']}")
+    return 0
+
+
 def _registry(args: argparse.Namespace):
     from ..diagnosis import ModelRegistry
 
@@ -503,6 +538,15 @@ def _build_parser() -> argparse.ArgumentParser:
     lab_run.add_argument("--max-rounds", type=int, default=6)
     lab_run.add_argument("--budget", type=float, default=600.0, help="seconds")
     lab_run.set_defaults(handler=_cmd_lab_run)
+
+    lab_factory = lab_sub.add_parser("factory", help="generate and validate a new feature extractor")
+    lab_factory.add_argument("--spec", type=Path, required=True)
+    lab_factory.add_argument("--data-root", type=Path, required=True)
+    lab_factory.add_argument("--output", type=Path, required=True)
+    lab_factory.add_argument("--goal", required=True)
+    lab_factory.add_argument("--seeds", type=int, default=3)
+    lab_factory.add_argument("--budget", type=float, default=600.0)
+    lab_factory.set_defaults(handler=_cmd_lab_factory)
 
     # -- inspect ---------------------------------------------------------
     inspect = sub.add_parser("inspect", help="describe a signal file's columns/arrays")
