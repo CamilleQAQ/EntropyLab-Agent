@@ -39,6 +39,12 @@
 | 策略 k=3 | 216 条记录，留一数据集 | `python scripts/run_strategy_eval.py` |
 | 消融 | 3 次重复 | `python scripts/run_ablation.py --only gear-hard-case --repeats 3` |
 
+## 2b. 已撤回的数字
+
+| 数字 | 为什么撤回 |
+|---|---|
+| Paderborn 冻结测试 **88.4%** | 依赖已删除的固定 manifest（另一批轴承），当前仓库无法复现。当前随机划分下 5 个划分的验证/测试分别为 0.9611/0.9657（FUSION_TIME+ET）与 0.9898/0.9935（FUSION_TIME_SPEC+ET） |
+
 ## 3. 排除的实验与原因
 
 | 实验 | 结果 | 为什么排除 |
