@@ -2,12 +2,36 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from entropy_agent.continual import BatchPlan, PlanError, run_continual, save_plan
+from entropy_agent.continual.plan import Batch
 from entropy_agent.io.dataset import load_dataset_records, load_dataset_spec
+
+
+def test_extra_retention_probes_are_visible_only_after_their_batch() -> None:
+    plan = BatchPlan(
+        dataset_id="example",
+        batches=(
+            Batch(0, ("train0",), probe_groups=("probe0",), retention_probe_groups=("extra0",)),
+            Batch(1, ("train1",), probe_groups=("probe1",), retention_probe_groups=("extra1",)),
+        ),
+        validation_groups=("reference",),
+        holdout_groups=("holdout",),
+    )
+    groups = ["train0", "train1", "probe0", "probe1", "extra0", "extra1", "reference", "holdout"]
+    records = [SimpleNamespace(group=group, label=0) for group in groups]
+    restored = BatchPlan.from_dict(plan.to_dict())
+    restored.validate(records)
+    assert restored.visible_probes(0) == {"reference": ("reference",), "batch-0": ("probe0",)}
+    assert restored.visible_probes(1) == {
+        "reference": ("reference",), "batch-0": ("probe0", "extra0"), "batch-1": ("probe1",),
+    }
+    for index in range(2):
+        assert not restored.masks(records, index)["train"][4:6].any()
 
 
 def _records_and_plan(tiny_dataset, batches: int = 2):

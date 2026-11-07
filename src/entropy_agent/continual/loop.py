@@ -168,15 +168,6 @@ def run_continual(
     # every batch's own probes.  They are what makes the guardrail identifiable
     # even when validation accuracy saturates.
     groups_array = np.asarray([record.group for record in records], dtype=object)
-    probe_sets: dict[str, np.ndarray] = {
-        "reference": np.isin(groups_array, np.asarray(plan.validation_groups, dtype=object))
-    }
-    for probe_batch in plan.batches:
-        if probe_batch.probe_groups:
-            probe_sets[f"batch-{probe_batch.batch_id}"] = np.isin(
-                groups_array, np.asarray(probe_batch.probe_groups, dtype=object)
-            )
-
     feature_cache: dict = {}
     feature_cache[_feature_key(spec)] = (features, labels, dimension)
     selection_pool = tuple(pool) if pool is not None else ()
@@ -188,9 +179,8 @@ def run_continual(
         # Temporal discipline: a decision at batch k may only see probes from
         # batches that have already arrived (reference probes are always visible).
         visible_probes = {
-            name: mask
-            for name, mask in probe_sets.items()
-            if name == "reference" or int(name.split("-")[1]) <= batch_index
+            name: np.isin(groups_array, np.asarray(groups, dtype=object))
+            for name, groups in plan.visible_probes(batch_index).items()
         }
         masks = plan.masks(records, batch_index)
         masks.update(visible_probes)
@@ -500,6 +490,8 @@ def _write_report(path: Path, summary: dict, trajectory: list[dict], holdout: di
         f"- 组数：批次 {summary['plan']['groups']['batches']}，"
         f"validation {summary['plan']['groups']['validation']}，"
         f"holdout {summary['plan']['groups']['holdout']}",
+        f"- 每批基础探测组 {summary['plan']['groups']['probes']}，"
+        f"额外旧工况探测组 {summary['plan']['groups']['additional_retention_probes']}。",
         "",
         "## 1. 逐批决策",
         "",
@@ -554,9 +546,6 @@ def _write_report(path: Path, summary: dict, trajectory: list[dict], holdout: di
     lines.append("## 4. 说明")
     lines.append("")
     lines.append("- 训练集只增不减，历史批次永不重切；validation 与 holdout 都是冻结集。")
-    lines.append(
-        "- 这里的“遗忘”用冻结 validation 的轨迹衡量（初始域），"
-        "因为归档里没有每批独立的 probe 集。"
-    )
+    lines.append("- guardrail 使用参考集和已到达批次的探测集；额外探测组在所属批次成为历史后用于遗忘评估。")
     lines.append("- frozen = 只训第一批；continual = 逐批 champion/challenger；joint = 全部批次一次性重训。")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

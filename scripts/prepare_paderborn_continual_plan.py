@@ -42,6 +42,8 @@ def main() -> int:
     parser.add_argument("--dataset-id", default=None)
     parser.add_argument("--margin", type=float, default=0.005)
     parser.add_argument("--seed", type=int, default=20261104)
+    parser.add_argument("--extra-retention-per-cell", type=int, choices=range(10), default=0,
+                        help="additional measurements per class and prior condition, reserved from training")
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -53,6 +55,7 @@ def main() -> int:
     validation: list[str] = []
     round_groups: dict[str, list[str]] = defaultdict(list)
     round_probes: dict[str, list[str]] = defaultdict(list)
+    retention_probes: dict[str, list[str]] = defaultdict(list)
 
     for entry in manifest["classes"]:
         class_id = int(entry["class_id"])
@@ -88,7 +91,9 @@ def main() -> int:
                 validation_measurements = measurements[used : used + VALIDATION_PER_CELL]
                 used += VALIDATION_PER_CELL
                 validation.extend(groups_for(validation_measurements))
-            train_measurements = measurements[used:]
+            extra = args.extra_retention_per_cell if condition != ROUNDS[-1] else 0
+            retention_probes[condition].extend(groups_for(measurements[used : used + extra]))
+            train_measurements = measurements[used + extra:]
 
             holdout.extend(groups_for(holdout_measurements))
             round_probes[condition].extend(groups_for(probe_measurements))
@@ -102,6 +107,7 @@ def main() -> int:
                 groups=tuple(round_groups[condition]),
                 note=condition,
                 probe_groups=tuple(round_probes.get(condition, ())),
+            retention_probe_groups=tuple(retention_probes.get(condition, ())),
             )
         )
 
@@ -114,6 +120,7 @@ def main() -> int:
         notes=(
             "per (class, condition): 4 holdout + 3 probe + rest train "
             "(reference condition also reserves 3 validation measurements); "
+            f"earlier conditions reserve {args.extra_retention_per_cell} additional retention measurements per class; "
             "rounds = N15_M07_F10 -> N15_M01_F10 -> N15_M07_F04"
         ),
     )
@@ -123,7 +130,8 @@ def main() -> int:
     for batch in plan.batches:
         print(
             f"  round {batch.batch_id} ({batch.note}): "
-            f"train {len(batch.groups)} groups, probe {len(batch.probe_groups)} groups"
+            f"train {len(batch.groups)} groups, probe {len(batch.probe_groups)} groups, "
+            f"extra retention {len(batch.retention_probe_groups)} groups"
         )
     print(
         f"  validation {len(plan.validation_groups)} groups, "

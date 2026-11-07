@@ -36,6 +36,8 @@ class Batch:
     # Probe groups belong to this batch's domain but are never trained on: they
     # measure retention and new-domain gains for the V2 decision layer.
     probe_groups: tuple[str, ...] = ()
+    # Additional labeled measurements used only after this batch becomes old.
+    retention_probe_groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class BatchPlan:
                 groups=tuple(str(group) for group in entry["groups"]),
                 note=str(entry.get("note", "")),
                 probe_groups=tuple(str(g) for g in entry.get("probe_groups", ())),
+                retention_probe_groups=tuple(str(g) for g in entry.get("retention_probe_groups", ())),
             )
             for entry in payload["batches"]
         )
@@ -103,6 +106,8 @@ class BatchPlan:
                     "groups": list(batch.groups),
                     "note": batch.note,
                     "probe_groups": list(batch.probe_groups),
+                    **({"retention_probe_groups": list(batch.retention_probe_groups)}
+                       if batch.retention_probe_groups else {}),
                 }
                 for batch in self.batches
             ],
@@ -127,6 +132,16 @@ class BatchPlan:
             collected.extend(batch.groups)
         return tuple(collected)
 
+    def visible_probes(self, batch_index: int) -> dict[str, tuple[str, ...]]:
+        probes = {"reference": self.validation_groups}
+        for batch in self.batches[: batch_index + 1]:
+            groups = batch.probe_groups
+            if batch.batch_id < batch_index:
+                groups += batch.retention_probe_groups
+            if groups:
+                probes[f"batch-{batch.batch_id}"] = groups
+        return probes
+
     # -- validation ------------------------------------------------------
     def validate(self, records) -> dict:
         """Check the plan partitions the dataset and covers every class."""
@@ -140,6 +155,7 @@ class BatchPlan:
             + self.holdout_groups
             + tuple(group for batch in self.batches for group in batch.groups)
             + tuple(group for batch in self.batches for group in batch.probe_groups)
+            + tuple(group for batch in self.batches for group in batch.retention_probe_groups)
         )
         if len(set(planned)) != len(planned):
             duplicates = sorted(
@@ -170,6 +186,7 @@ class BatchPlan:
             "groups": {
                 "batches": [len(batch.groups) for batch in self.batches],
                 "probes": [len(batch.probe_groups) for batch in self.batches],
+                "additional_retention_probes": [len(batch.retention_probe_groups) for batch in self.batches],
                 "validation": len(self.validation_groups),
                 "holdout": len(self.holdout_groups),
             },
@@ -186,7 +203,7 @@ class BatchPlan:
         probes = np.isin(
             groups,
             np.asarray(
-                [g for batch in self.batches[: batch_index + 1] for g in batch.probe_groups],
+                [group for probe in self.visible_probes(batch_index).values() for group in probe],
                 dtype=object,
             ),
         )
