@@ -350,7 +350,7 @@ def run_continual(
                 gain_new,
                 probe_scores,
                 )
-        decision_record[gate_status] = gate_status
+        decision_record["gate_status"] = gate_status
         decisions.append(decision_record)
 
         if promoted and new_model is not None:
