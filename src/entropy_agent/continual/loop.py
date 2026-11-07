@@ -175,6 +175,7 @@ def run_continual(
     selection_cost_model = cost_model if cost_model is not None else CostModel()
     windows_per_unit = len(records) * spec.window.windows_per_record
 
+    pending: dict | None = None
     for batch_index in range(plan.batch_count):
         # Temporal discipline: a decision at batch k may only see probes from
         # batches that have already arrived (reference probes are always visible).
@@ -227,6 +228,7 @@ def run_continual(
                 "skipped": selection.skipped,
             }
             promoted = selection.model is not None
+            gate_status = "publish" if promoted else "reject"
             if promoted:
                 reason = selected.reason if selected is not None else "committed"
             else:
@@ -255,8 +257,9 @@ def run_continual(
             retention_drop = None
             gain_new = None
             probe_scores = None
+            rejudged = None
             if champion is None:
-                decision = Decision(True, "initial batch: the first model becomes the champion")
+                decision = Decision(True, "initial batch: the first model becomes the champion", status="publish")
             else:
                 if criterion == "guardrail":
                     champion_scores = {
@@ -290,6 +293,23 @@ def run_continual(
                         if previous
                         else 0.0
                     )
+                    deferred = pending
+                    if deferred is not None and batch_index - deferred["batch"] <= 1:
+                        deferred_scores = {
+                            name: float(
+                                evaluate_partition(
+                                    prepared, deferred["model"], name, healthy_class_id=healthy
+                                )[0]["multiclass_accuracy"]
+                            )
+                            for name in visible_probes
+                        }
+                        d_gain = deferred_scores.get(current, 0.0) - champion_scores.get(current, 0.0)
+                        d_harm = max(
+                            (champion_scores[name] - deferred_scores[name] for name in previous),
+                            default=0.0,
+                        )
+                        if d_harm <= guard_tolerance and d_gain > min_gain:
+                            rejudged = (deferred, d_gain, d_harm)
                 decision = decide(
                     criterion=criterion,
                     champion_validation_macro_f1=champion.validation_macro_f1,
@@ -301,14 +321,26 @@ def run_continual(
                     min_gain=min_gain,
                 )
             promoted, reason = decision.promoted, decision.reason
+            gate_status = decision.status
+            if rejudged is not None:
+                deferred, d_gain, d_harm = rejudged
+                promoted = True
+                gate_status = "publish"
+                reason = (
+                    f"deferred candidate re-judged: gain {d_gain:+.4f}, harm {d_harm:.4f}"
+                )
+                new_spec = deferred["spec"]
+                new_model = deferred["model"]
+                new_directory = deferred["dir"]
+                challenger = dict(challenger)
+                challenger["model_id"] = deferred["model_id"]
             retention_drop = decision.retention_drop
             gain_new = decision.gain_new
             new_spec = spec
             new_model = result.artifact.model
             new_directory = output_dir / "challengers" / f"batch-{batch_index}"
 
-        decisions.append(
-            _decision(
+        decision_record = _decision(
                 batch_index,
                 challenger,
                 champion,
@@ -317,8 +349,9 @@ def run_continual(
                 retention_drop,
                 gain_new,
                 probe_scores,
-            )
-        )
+                )
+        decision_record[gate_status] = gate_status
+        decisions.append(decision_record)
 
         if promoted and new_model is not None:
             champion = Champion(
