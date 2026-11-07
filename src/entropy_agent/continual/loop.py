@@ -185,8 +185,15 @@ def run_continual(
     windows_per_unit = len(records) * spec.window.windows_per_record
 
     for batch_index in range(plan.batch_count):
+        # Temporal discipline: a decision at batch k may only see probes from
+        # batches that have already arrived (reference probes are always visible).
+        visible_probes = {
+            name: mask
+            for name, mask in probe_sets.items()
+            if name == "reference" or int(name.split("-")[1]) <= batch_index
+        }
         masks = plan.masks(records, batch_index)
-        masks.update(probe_sets)
+        masks.update(visible_probes)
         training_records = int(masks["train"].sum())
 
         if select:
@@ -196,7 +203,7 @@ def run_continual(
                 records=records,
                 labels=labels,
                 masks=masks,
-                probe_names=tuple(probe_sets),
+                probe_names=tuple(visible_probes),
                 champion=champion,
                 pool=selection_pool,
                 budget_seconds=selection_budget,
@@ -268,7 +275,7 @@ def run_continual(
                                 prepared, champion.model, name, healthy_class_id=healthy
                             )[0]["multiclass_accuracy"]
                         )
-                        for name in probe_sets
+                        for name in visible_probes
                     }
                     challenger_scores = {
                         name: float(
@@ -276,18 +283,18 @@ def run_continual(
                                 prepared, result.artifact.model, name, healthy_class_id=healthy
                             )[0]["multiclass_accuracy"]
                         )
-                        for name in probe_sets
+                        for name in visible_probes
                     }
                     probe_scores = {
                         "champion": {k: round(v, 4) for k, v in champion_scores.items()},
                         "challenger": {k: round(v, 4) for k, v in challenger_scores.items()},
                     }
                     current = f"batch-{batch_index}"
-                    if current in probe_sets:
+                    if current in visible_probes:
                         gain_new = challenger_scores[current] - champion_scores[current]
                     else:
                         gain_new = challenger["val_accuracy"] - champion.validation_accuracy
-                    previous = [name for name in probe_sets if name != current]
+                    previous = [name for name in visible_probes if name != current]
                     retention_drop = (
                         max(champion_scores[name] - challenger_scores[name] for name in previous)
                         if previous
