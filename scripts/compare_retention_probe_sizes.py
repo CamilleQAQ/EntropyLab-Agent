@@ -13,7 +13,7 @@ from entropy_agent.io.dataset import load_dataset_records, load_dataset_spec
 from entropy_agent.training.pipeline import extract_features
 
 
-def expand(plan, cells):
+def expand(plan, cells, count: int = 3):
     batches = []
     for batch in plan.batches[:-1]:
         available = set(batch.groups)
@@ -26,9 +26,9 @@ def expand(plan, cells):
             positions = {group: i for i, group in enumerate(batch.groups)}
             eligible = [groups for groups in measurements.values() if available.issuperset(groups)]
             eligible.sort(key=lambda groups: min(positions[group] for group in groups))
-            if len(eligible) < 3:
+            if len(eligible) < count:
                 raise ValueError("each class and prior condition needs three extra measurement indices")
-            extras.extend(group for groups in eligible[:3] for group in groups)
+            extras.extend(group for groups in eligible[:count] for group in groups)
         extra_set = set(extras)
         batches.append(replace(batch, groups=tuple(g for g in batch.groups if g not in extra_set),
                                retention_probe_groups=tuple(extras)))
@@ -38,7 +38,9 @@ def expand(plan, cells):
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
-    output = parser.parse_args().output
+    parser.add_argument("--extra-measurements", type=int, default=3)
+    args = parser.parse_args()
+    output = args.output
     output.mkdir(parents=True, exist_ok=False)
     spec = load_dataset_spec(ROOT / "configs/paderborn_3class_fusion_time_extratrees.json")
     records = load_dataset_records(spec, DATA)
@@ -48,7 +50,7 @@ def main():
     plans = {}
     for seed in HISTORICAL_SEEDS:
         original = BatchPlan.load(PLANS / f"paderborn-plan-{seed}.json")
-        large = expand(original, cells)
+        large = expand(original, cells, args.extra_measurements)
         small = replace(large, batches=tuple(replace(batch, retention_probe_groups=()) for batch in large.batches))
         original.validate(records)
         large.validate(records)
@@ -65,7 +67,7 @@ def main():
         arms = {
             "original_27": (original, original_models),
             "matched_27": (small, shared_models),
-            "expanded_54": (large, shared_models),
+            f"expanded_{27 + 9 * args.extra_measurements}": (large, shared_models),
         }
         locked[seed] = {
             name: (models, replay("current_gate", probe_results(spec, plan, bundle, models), {}))
