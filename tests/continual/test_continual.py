@@ -142,3 +142,50 @@ def test_plan_file_round_trip(tiny_dataset, tmp_path: Path) -> None:
     restored = BatchPlan.load(path)
     assert restored.to_dict() == plan.to_dict()
     restored.validate(records)
+
+
+def test_guardrail_defers_a_conflicting_challenger():
+    from entropy_agent.continual.decision import decide
+
+    decision = decide(
+        criterion="guardrail",
+        champion_validation_macro_f1=0.9,
+        challenger_validation_macro_f1=0.9,
+        margin=0.005,
+        retention_drop=0.03,
+        gain_new=0.2,
+        guard_tolerance=0.02,
+    )
+    assert decision.status == "defer"
+    assert decision.promoted is False
+
+
+def test_guardrail_rejects_a_severe_retention_drop():
+    from entropy_agent.continual.decision import decide
+
+    decision = decide(
+        criterion="guardrail",
+        champion_validation_macro_f1=0.9,
+        challenger_validation_macro_f1=0.9,
+        margin=0.005,
+        retention_drop=0.05,
+        gain_new=0.2,
+        guard_tolerance=0.02,
+    )
+    assert decision.status == "reject"
+
+
+def test_guardrail_publishes_a_clean_win():
+    from entropy_agent.continual.decision import decide
+
+    decision = decide(
+        criterion="guardrail",
+        champion_validation_macro_f1=0.9,
+        challenger_validation_macro_f1=0.9,
+        margin=0.005,
+        retention_drop=0.01,
+        gain_new=0.2,
+        guard_tolerance=0.02,
+    )
+    assert decision.status == "publish"
+    assert decision.promoted is True

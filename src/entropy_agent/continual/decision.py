@@ -25,6 +25,10 @@ class Decision:
     reason: str
     retention_drop: float | None = None
     gain_new: float | None = None
+    # Three-state gate: publish / defer / reject.  `defer` keeps the
+    # challenger alive for re-judgement when more labels arrive; `rejected`
+    # drops it.
+    status: str = "publish"
 
 
 def decide(
@@ -55,19 +59,43 @@ def decide(
 
     if retention_drop is None or gain_new is None:
         raise ValueError("guardrail criterion needs retention_drop and gain_new")
-    if retention_drop > guard_tolerance:
+    if retention_drop > 2 * guard_tolerance:
         return Decision(
             promoted=False,
             reason=(
-                f"retention drop {retention_drop:.4f} > tolerance {guard_tolerance:.4f} "
+                f"retention drop {retention_drop:.4f} > 2x tolerance {2 * guard_tolerance:.4f} "
                 f"(new probe gain {gain_new:+.4f})"
             ),
             retention_drop=retention_drop,
             gain_new=gain_new,
+            status="reject",
+        )
+    if retention_drop > guard_tolerance:
+        if gain_new > min_gain:
+            return Decision(
+                promoted=False,
+                reason=(
+                    f"trade-off: new gain {gain_new:+.4f} vs retention drop "
+                    f"{retention_drop:.4f}; deferring for re-judgement"
+                ),
+                retention_drop=retention_drop,
+                gain_new=gain_new,
+                status="defer",
+            )
+        return Decision(
+            promoted=False,
+            reason=(
+                f"retention drop {retention_drop:.4f} > tolerance {guard_tolerance:.4f} "
+                f"without new-batch gain {gain_new:+.4f}"
+            ),
+            retention_drop=retention_drop,
+            gain_new=gain_new,
+            status="reject",
         )
     if gain_new <= min_gain:
         return Decision(
             promoted=False,
+            status="reject",
             reason=(
                 f"new-batch gain {gain_new:+.4f} <= minimum {min_gain:+.4f} "
                 f"(retention drop {retention_drop:.4f})"
