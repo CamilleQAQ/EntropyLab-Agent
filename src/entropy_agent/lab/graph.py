@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -55,6 +56,10 @@ class LabState(TypedDict, total=False):
 
 
 RISKY_ACTIONS = {"run_custom_experiment", "finish"}
+
+# Ablation switches (read once at import): used by scripts/run_ablation.py.
+DISABLE_GROUNDING = os.environ.get("LAB_DISABLE_GROUNDING") == "1"
+DISABLE_REVIEWER = os.environ.get("LAB_DISABLE_REVIEWER") == "1"
 
 
 SYSTEM_PROMPT = """You are the Research Director of an autonomous bearing-diagnosis lab.
@@ -159,7 +164,9 @@ def build_graph(ctx: LabContext, llm=chat, checkpointer=None):
         )
         action = _parse_action(raw)
         hypothesis_problems = (
-            grounding.problems(action.hypothesis, history) if action.hypothesis else []
+            []
+            if DISABLE_GROUNDING
+            else (grounding.problems(action.hypothesis, history) if action.hypothesis else [])
         )
         if hypothesis_problems:
             repair = (
@@ -256,7 +263,11 @@ def build_graph(ctx: LabContext, llm=chat, checkpointer=None):
     def review(state: LabState) -> LabState:
         result = state.get("result") or {}
         baseline = state.get("baseline")
-        verdict = review_experiment(result, baseline, state.get("claim", ""))
+        verdict = (
+            {"verdict": "accept", "findings": []}
+            if DISABLE_REVIEWER
+            else review_experiment(result, baseline, state.get("claim", ""))
+        )
         history = list(state.get("history", []))
         history.append({"tool": "review", **verdict})
         ledger.record_review(state.get("rounds", 0), verdict["verdict"], verdict["findings"])
