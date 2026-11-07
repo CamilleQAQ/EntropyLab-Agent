@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
 from . import grounding
@@ -51,6 +52,9 @@ class LabState(TypedDict, total=False):
     status: str
     report: str
     hypothesis_problems: list[str]
+
+
+RISKY_ACTIONS = {"run_custom_experiment", "finish"}
 
 
 SYSTEM_PROMPT = """You are the Research Director of an autonomous bearing-diagnosis lab.
@@ -110,7 +114,7 @@ def _parse_action(text: str) -> Action:
     return Action.model_validate(json.loads(cleaned))
 
 
-def build_graph(ctx: LabContext, llm=chat):
+def build_graph(ctx: LabContext, llm=chat, checkpointer=None):
     ledger = Ledger(ctx.workspace / "ledger.sqlite")
 
     def plan(state: LabState) -> LabState:
@@ -194,6 +198,32 @@ def build_graph(ctx: LabContext, llm=chat):
             "status": "planned" if action.action not in {"finish", "ask_human"} else action.action,
             "hypothesis_problems": hypothesis_problems,
         }
+
+    def guard(state: LabState) -> LabState:
+        """Human-in-the-loop gate: pause before a risky or concluding action."""
+        action = state.get("action", {})
+        name = action.get("action")
+        if checkpointer is not None and name in RISKY_ACTIONS:
+            answer = interrupt(
+                {
+                    "question": f"Approve `{name}` with args {action.get('args')}?",
+                    "action": name,
+                    "args": action.get("args"),
+                    "hypothesis": state.get("hypothesis", ""),
+                }
+            )
+            if not answer:
+                return {
+                    "status": "rejected",
+                    "action": {
+                        "action": "finish",
+                        "args": {},
+                        "hypothesis": action.get("hypothesis", ""),
+                        "claim": "",
+                        "reason": "human rejected the action",
+                    },
+                }
+        return {}
 
     def execute(state: LabState) -> LabState:
         action = state.get("action", {})
@@ -279,22 +309,38 @@ def build_graph(ctx: LabContext, llm=chat):
         return {"report": "\n".join(lines), "status": "done"}
 
     def after_plan(state: LabState) -> str:
-        return "finalize" if state.get("status") in {"finish", "ask_human"} else "execute"
+        return "guard"
+
+    def after_guard(state: LabState) -> str:
+        if state.get("status") == "rejected":
+            return "finalize"
+        action = (state.get("action") or {}).get("action")
+        if action in {"finish", "ask_human"}:
+            return "finalize"
+        return "execute"
 
     def after_review(state: LabState) -> str:
         return "finalize" if state.get("status") == "finish" else "plan"
 
     graph = StateGraph(LabState)
     graph.add_node("plan", plan)
+    graph.add_node("guard", guard)
     graph.add_node("execute", execute)
     graph.add_node("review", review)
     graph.add_node("finalize", finalize)
     graph.set_entry_point("plan")
-    graph.add_conditional_edges("plan", after_plan, {"execute": "execute", "finalize": "finalize"})
+    graph.add_conditional_edges("plan", after_plan, {"guard": "guard", "finalize": "finalize"})
+    graph.add_conditional_edges("guard", after_guard, {"execute": "execute", "finalize": "finalize"})
     graph.add_edge("execute", "review")
     graph.add_conditional_edges("review", after_review, {"plan": "plan", "finalize": "finalize"})
     graph.add_edge("finalize", END)
-    return graph.compile(), ledger
+    return graph.compile(checkpointer=checkpointer), ledger
+
+
+def _default_ask(payload: dict) -> bool:
+    print(f"\n[human-in-the-loop] {payload.get('question')}")
+    reply = input("approve? [y/N]: ").strip().lower()
+    return reply in {"y", "yes"}
 
 
 def run_lab(
@@ -303,8 +349,15 @@ def run_lab(
     goal: str,
     max_rounds: int = 6,
     llm=chat,
+    interactive: bool = False,
+    ask=None,
+    thread_id: str = "lab",
 ) -> dict:
-    graph, ledger = build_graph(ctx, llm=llm)
+    from langgraph.checkpoint.memory import MemorySaver
+
+    checkpointer = MemorySaver() if interactive else None
+    graph, ledger = build_graph(ctx, llm=llm, checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": thread_id}} if interactive else None
     initial: LabState = {
         "goal": goal,
         "max_rounds": max_rounds,
@@ -316,7 +369,14 @@ def run_lab(
         "status": "start",
         "baseline": None,
     }
-    final = graph.invoke(initial)
+    if interactive:
+        final = graph.invoke(initial, config)
+        while "__interrupt__" in final:
+            payload = final["__interrupt__"][0].value
+            answer = (ask or _default_ask)(payload)
+            final = graph.invoke(Command(resume=answer), config)
+    else:
+        final = graph.invoke(initial)
     report_path = ctx.workspace / "report.md"
     report_path.write_text(final.get("report", ""), encoding="utf-8")
     return {

@@ -1,0 +1,25 @@
+{
+  "tasks": [
+    {
+      "id": "paderborn-baseline",
+      "dataset": "paderborn",
+      "goal": "在验证集上建立可靠基线，并说明结论边界",
+      "max_rounds": 3,
+      "expect": {"min_experiments": 1, "min_seeds": 3, "min_hypotheses": 1}
+    },
+    {
+      "id": "cwru-class-imbalance",
+      "dataset": "cwru",
+      "goal": "找出 NORMAL 类样本少（4 个录制）对指标的影响，并给出改进方向",
+      "max_rounds": 3,
+      "expect": {"min_experiments": 1, "min_seeds": 3, "min_hypotheses": 1}
+    },
+    {
+      "id": "gear-hard-case",
+      "dataset": "gear",
+      "goal": "判断这个数据集是否适合做方法比较，用数字说明理由",
+      "max_rounds": 3,
+      "expect": {"min_experiments": 1, "min_seeds": 3, "min_hypotheses": 1}
+    }
+  ]
+}

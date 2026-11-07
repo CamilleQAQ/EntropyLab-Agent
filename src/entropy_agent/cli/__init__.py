@@ -204,7 +204,12 @@ def _cmd_lab_run(args: argparse.Namespace) -> int:
         goal=args.goal,
         budget_seconds=args.budget,
     )
-    summary = run_lab(ctx, goal=args.goal, max_rounds=args.max_rounds)
+    summary = run_lab(
+        ctx,
+        goal=args.goal,
+        max_rounds=args.max_rounds,
+        interactive=args.interactive,
+    )
     print(f"status       : {summary['status']}")
     print(f"rounds       : {summary['rounds']}")
     print(f"spent        : {summary['spent_seconds']} s")
@@ -537,6 +542,7 @@ def _build_parser() -> argparse.ArgumentParser:
     lab_run.add_argument("--goal", required=True)
     lab_run.add_argument("--max-rounds", type=int, default=6)
     lab_run.add_argument("--budget", type=float, default=600.0, help="seconds")
+    lab_run.add_argument("--interactive", action="store_true", help="pause for approval before risky actions")
     lab_run.set_defaults(handler=_cmd_lab_run)
 
     lab_factory = lab_sub.add_parser("factory", help="generate and validate a new feature extractor")
