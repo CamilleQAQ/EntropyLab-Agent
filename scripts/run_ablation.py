@@ -126,29 +126,63 @@ def main() -> int:
     parser.add_argument("--tasks", type=Path, default=ROOT / "configs/lab_tasks.json")
     parser.add_argument("--output", type=Path, default=ROOT / "results/ablation-20261107")
     parser.add_argument("--only", default="paderborn-baseline,cwru-class-imbalance")
+    parser.add_argument("--repeats", type=int, default=1)
     args = parser.parse_args()
 
     tasks = [task for task in load_tasks(args.tasks) if task.task_id in set(args.only.split(","))]
     rows = []
     for task in tasks:
         for condition, env_extra in CONDITIONS.items():
-            output = args.output / f"{task.task_id}-{condition}"
-            print(f"running {task.task_id} / {condition} ...", flush=True)
-            rows.append(run_condition(task, condition, env_extra, output))
+            for repeat in range(args.repeats):
+                output = args.output / f"{task.task_id}-{condition}-r{repeat}"
+                print(f"running {task.task_id} / {condition} / r{repeat} ...", flush=True)
+                row = run_condition(task, condition, env_extra, output)
+                row["repeat"] = repeat
+                rows.append(row)
 
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "ablation.json").write_text(
         json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
-    header = f"{'task':22s} {'condition':13s} {'score':>6s} {'exp':>4s} {'hyp':>4s} {'ungrounded':>10s} {'unstable':>8s}"
-    print("\n" + header)
+    import statistics
+
+    print()
+    header = (
+        f"{'task':22s} {'condition':13s} {'n':>2s} {'score':>7s} {'ungrounded':>12s} "
+        f"{'unstable':>10s} {'runs_with_findings':>18s}"
+    )
+    print(header)
+    grouped: dict[tuple[str, str], list[dict]] = {}
     for row in rows:
+        grouped.setdefault((row["task"], row["condition"]), []).append(row)
+    aggregate = []
+    for (task_id, condition), items in grouped.items():
+        scores = [item["score"] for item in items]
+        ungrounded = [item.get("ungrounded_hypotheses", 0) for item in items]
+        unstable = [item.get("unstable_experiments", 0) for item in items]
+        findings = [item.get("review_findings", 0) for item in items]
+        entry = {
+            "task": task_id,
+            "condition": condition,
+            "runs": len(items),
+            "score_mean": round(statistics.mean(scores), 4),
+            "score_std": round(statistics.stdev(scores), 4) if len(scores) > 1 else 0.0,
+            "ungrounded_total": sum(ungrounded),
+            "ungrounded_mean": round(statistics.mean(ungrounded), 3),
+            "unstable_total": sum(unstable),
+            "runs_with_findings": sum(1 for value in findings if value > 0),
+        }
+        aggregate.append(entry)
         print(
-            f"{row['task']:22s} {row['condition']:13s} {row['score']:6.2f} "
-            f"{row.get('experiments', 0):4d} {row.get('hypotheses', 0):4d} "
-            f"{row.get('ungrounded_hypotheses', 0):10d} {row.get('unstable_experiments', 0):8d}"
+            f"{task_id:22s} {condition:13s} {entry['runs']:2d} "
+            f"{entry['score_mean']:7.2f} {entry['ungrounded_total']:12d} "
+            f"{entry['unstable_total']:10d} {entry['runs_with_findings']:18d}"
         )
+
+    (args.output / "aggregate.json").write_text(
+        json.dumps(aggregate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     return 0
 
 
