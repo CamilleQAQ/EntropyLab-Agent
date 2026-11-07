@@ -34,7 +34,7 @@ SOURCE = Path(
     r"\TriaxialBearingVibrationDatasetofInductionMotorunderVaryingLoad\Dataset"
 )
 OUT = Path(
-    r"E:\Research\EntropyLab Agent\renovation\data\paper\triaxial_7class"
+    str(Path(__file__).resolve().parents[1] / "data/paper/triaxial_7class")
 )
 CHANNEL_COLUMN = 1  # X axis: column 1 is the time stamp, 2..4 are X/Y/Z
 WINDOW = 1892

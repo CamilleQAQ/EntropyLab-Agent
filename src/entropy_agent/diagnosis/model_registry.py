@@ -23,9 +23,15 @@ REGISTRY_VERSION = 1
 
 class ModelRegistry:
     def __init__(self, root: Path, *, trusted: bool = False) -> None:
+        # Accept either the registry directory or the index file itself.
         self.trusted = trusted
-        self.root = Path(root).expanduser().resolve()
-        self.index_path = self.root / "registry.json"
+        resolved = Path(root).expanduser().resolve()
+        if resolved.suffix == ".json":
+            self.index_path = resolved
+            self.root = resolved.parent
+        else:
+            self.root = resolved
+            self.index_path = resolved / "registry.json"
 
     def _empty(self) -> dict[str, Any]:
         return {
@@ -114,6 +120,15 @@ class ModelRegistry:
             "provenance": artifact.config["provenance"],
             "test_result": artifact.test_result,
         }
+
+    def entries(self) -> list[dict[str, Any]]:
+        """Lightweight listing: no artifact loading, so no trusted flag needed."""
+        index = self._read()
+        return [
+            {"model_id": model_id, "path": str(self._resolve_path(entry["path"]))}
+            for model_id, entry in sorted(index["models"].items())
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+        ]
 
     def list(self) -> list[dict[str, Any]]:
         return [self.show(model_id) for model_id in self.model_ids()]

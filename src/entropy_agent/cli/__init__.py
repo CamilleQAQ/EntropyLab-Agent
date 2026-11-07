@@ -268,12 +268,20 @@ def _registry(args: argparse.Namespace):
 def _cmd_models(args: argparse.Namespace) -> int:
     registry = _registry(args)
     if args.models_command == "list":
-        for entry in registry.list():
-            profile = entry["profile"]
-            print(
-                f"{entry['model_id']:60s} {profile['profile_id']:24s} "
-                f"{profile['signal_type']}/{profile['signal_role']}"
-            )
+        for entry in registry.entries():
+            artifact = Path(entry["path"])
+            missing = "  [MISSING]" if not artifact.is_dir() else ""
+            profile_id = ""
+            config = artifact / "config.json"
+            if config.is_file():
+                try:
+                    profile_id = json.loads(config.read_text(encoding="utf-8"))[
+                        "diagnosis"
+                    ]["profile_id"]
+                except (OSError, ValueError, KeyError):
+                    profile_id = ""
+            print(f"{entry['model_id']:60s} {profile_id}")
+            print(f"    {artifact}{missing}")
         if not registry.model_ids():
             print("(registry is empty)")
         return 0
@@ -460,7 +468,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # -- models ----------------------------------------------------------
     models = sub.add_parser("models", help="model registry commands")
-    models.add_argument("--registry", type=Path, required=True)
+    models.add_argument(
+        "--registry",
+        type=Path,
+        default=Path("models/registry/registry.json"),
+    )
     models.add_argument("--trusted", action="store_true")
     models_sub = models.add_subparsers(dest="models_command", required=True)
 

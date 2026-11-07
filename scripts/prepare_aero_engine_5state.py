@@ -15,7 +15,7 @@ import numpy as np
 
 
 SOURCE = Path(r"E:\Research\EntropyLab Agent\7数据源\Aero engine bearing fault diagnosis\dataset")
-OUT = Path(r"E:\Research\EntropyLab Agent\renovation\data\paper\aero_engine_5state")
+OUT = Path(__file__).resolve().parents[1] / "data/paper/aero_engine_5state"
 CHANNEL = 2
 WINDOW = 2000
 SAMPLES_PER_STATE = 60

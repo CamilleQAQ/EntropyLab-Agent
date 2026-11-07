@@ -41,7 +41,7 @@ import numpy as np
 SOURCE = Path(
     r"E:\Research\EntropyLab Agent\7数据源\GearDatasets\GearDatasets\人字齿轮"
 )
-OUT = Path(r"E:\Research\EntropyLab Agent\renovation\data\paper\gear_5state")
+OUT = Path(__file__).resolve().parents[1] / "data/paper/gear_5state"
 CHANNEL_COLUMN = 0  # first vibration channel; column 10 is the speed signal
 WINDOW = 2000
 WINDOWS_PER_FILE = 6
