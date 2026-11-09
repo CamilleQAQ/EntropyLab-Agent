@@ -17,7 +17,7 @@
 | CWRU 特征工具验收 | 加入 Agent 生成的包络谱特征后，平均验证 Macro-F1 从 **0.9571** 提升到 **0.9715** | 4 类，5 个录制级划分，同一划分和分类器下配对比较 |
 | Paderborn 持续更新 | 相比冻结初始模型，留出测试准确率平均提升 **3.51 个百分点**，5 个划分中 3 个提升、2 个持平 | 按工况顺序引入数据，每轮决策仅使用已到达的批次 |
 
-实验协议与运行入口见[代表性实验](docs/25_experiments.md)。
+实验协议与运行入口见[代表性实验](docs/experiments.md)。
 
 ## 架构
 
@@ -38,7 +38,6 @@ python -m entropy_agent.cli lab run --help
 
 实验需要先准备相应数据集。调用 DeepSeek 的流程还需要在环境中设置 `DEEPSEEK_API_KEY`。脚本生成的特征、模型和实验账本写入本地输出目录。
 
-- [自主实验闭环与特征工具工厂](docs/21_research_lab.md)
-- [人工确认与任务级评测](docs/23_hitl_and_eval.md)
-- [持续更新与模型发布判据](docs/18_v2_decision_layer.md)
+- [自主实验、特征工具与任务评测](docs/research-lab.md)
+- [持续更新与模型发布判据](docs/continual-learning.md)
 - [第三方来源与许可声明](THIRD_PARTY_NOTICES.md)
