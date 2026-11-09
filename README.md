@@ -2,6 +2,10 @@
 
 面向工业故障诊断的自主实验智能体。使用 LangGraph 和 DeepSeek 编排假设生成、工具实验、证据审查和重规划，并通过 SQLite 保存实验配置、指标和决策依据。
 
+给定一个数据集配置和研究目标，Agent 可以先建立基线，再根据误差分布决定是否更换特征或分类器，最后提交带实验依据的报告。
+
+**技术栈** · Python · LangGraph · DeepSeek · Pydantic · scikit-learn · NumPy / SciPy · SQLite
+
 ## 项目亮点
 
 - **自主实验编排。** Agent 根据数据画像、预算和实验历史选择下一步。规则审查实验结果与假设引用的数字，关键动作可由人工确认。
@@ -26,17 +30,48 @@ DatasetSpec → 分组切分 → 特征提取 → 训练与评估 → 版本化�
 数据画像 → Agent 规划 → 人工确认（可选）→ 工具执行 → 规则审查 → 重规划或报告
 ```
 
-核心训练与诊断逻辑通过数据集规格和模型注册表复用。诊断由显式注册的模型和输入契约约束。评测包含任务执行检查，以及针对配对对照实验的账本证据核验。
+| 模块 | 职责 |
+| --- | --- |
+| `lab/` | 编排实验、记录证据、验收生成的特征工具，核验 Agent 提交的配对实验结论 |
+| `agent/` · `training/` | 管理特征缓存与候选预算，执行分组切分、训练和评估 |
+| `continual/` · `diagnosis/` | 按工况逐批评估候选模型，通过显式注册的模型及其输入契约运行诊断 |
+
+数据集配置定义标签、采样参数和分组规则。同一训练流水线可读取不同配置，诊断时由调用方明确选择适用的模型。
 
 ## 快速开始
 
+### 本地验证
+
+安装依赖后，可以直接检查仓库自带的 CSV 样例。测试使用模拟规划器和测试数据，支持离线验证实验编排、人工确认和证据评分。
+
 ```powershell
 python -m pip install -e ".[ml,test]" langgraph
+python -m entropy_agent.cli inspect --signal tests/fixtures/three_channels.csv
 python -m pytest tests/lab -q
-python -m entropy_agent.cli lab run --help
 ```
 
-实验需要先准备相应数据集。调用 DeepSeek 的流程还需要在环境中设置 `DEEPSEEK_API_KEY`。脚本生成的特征、模型和实验账本写入本地输出目录。
+### 运行一次研究实验
+
+准备 [CWRU 数据](docs/research-lab.md#cwru-案例)，并在环境中设置 `DEEPSEEK_API_KEY` 后，可运行以下示例。`--interactive` 会在提交结论或调用自生成特征前等待人工确认。
+
+```powershell
+python -m entropy_agent.cli lab run `
+  --spec configs/cwru_4class_fusion_time_extratrees.json `
+  --data-root data/paper/cwru_4class `
+  --output results/cwru-lab-demo `
+  --goal "建立四分类基线并分析各类别召回率" `
+  --max-rounds 5 --budget 300 --interactive
+```
+
+### 实验输出
+
+| 文件 | 内容 |
+| --- | --- |
+| `report.md` · `ledger.sqlite` | 研究报告，以及用于回查的假设、工具结果和审查记录 |
+| `cost_model.json` | 预算选型中各策略的预估成本与候选选择 |
+| `decisions.json` · `metrics.json` | 持续更新中各批次的决策、判定依据及留出集结果 |
+
+## 技术文档
 
 - [自主实验、特征工具与任务评测](docs/research-lab.md)
 - [持续更新与模型发布判据](docs/continual-learning.md)
