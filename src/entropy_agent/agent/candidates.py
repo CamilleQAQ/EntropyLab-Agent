@@ -1,4 +1,4 @@
-"""Deterministic, dataset-agnostic candidate pool for the v1 selector.
+"""Deterministic, dataset-agnostic candidate pool for feature selection.
 
 The pool lists (feature method, its parameters) x (classifier, its parameters).
 Feature methods are the eight entropy methods plus the deterministic

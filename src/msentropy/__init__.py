@@ -1,8 +1,8 @@
 """Python toolbox for single-scale and multiscale entropy algorithms.
 
 The numerical implementations have been validated against independently
-generated MATLAB reference outputs. See ``README.md`` for the usage guide
-and ``docs/validation.md`` for validation scope.
+generated MATLAB reference outputs. See ``tests/entropy_toolbox/`` for the
+numerical regression checks.
 
 Two layers are available:
 

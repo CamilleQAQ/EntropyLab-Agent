@@ -1,4 +1,4 @@
-"""One supervised experiment run, shared by the CLI and the legacy script.
+"""One supervised experiment run, shared by the CLI and script entry points.
 
 This is the single implementation of "train on a DatasetSpec, evaluate validation,
 open the test partition once, write predictions and a metrics summary".  The CLI

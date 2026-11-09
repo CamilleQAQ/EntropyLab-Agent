@@ -1,9 +1,8 @@
 """SQLite experiment memory: every trial survives, including failures.
 
 The schema is deliberately plain so the table can be inspected with any SQLite
-client and every reported number can be recomputed from a trial row.  v1.1 adds
-the split seed, the repeated-validation mean and standard deviation, how many
-feature rows the trial actually paid for, and why the selector proposed it.
+client. Trial rows record the split seed, validation statistics, extracted
+feature rows, and the selector's reason.
 """
 
 from __future__ import annotations
@@ -79,7 +78,7 @@ class ExperimentMemory:
         self._connection.commit()
 
     def _migrate(self) -> None:
-        """Add v1.1 columns to a dataset written by v1 instead of failing."""
+        """Add missing columns when opening an older trial database."""
         existing = {
             row["name"]
             for row in self._connection.execute("PRAGMA table_info(trials)")

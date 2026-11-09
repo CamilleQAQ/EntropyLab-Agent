@@ -1,4 +1,4 @@
-"""Command-line entry point for EntropyLab Agent v2.
+"""Command-line entry point for EntropyLab Agent.
 
 Subcommands are thin wrappers: every behaviour lives in a library module, so the
 CLI cannot drift from the API used by the tests and scripts.
@@ -434,7 +434,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="entropylab",
-        description="EntropyLab Agent v2: feature selection, training, diagnosis.",
+        description="EntropyLab Agent: experiment orchestration, training, and diagnosis.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -527,13 +527,13 @@ def _build_parser() -> argparse.ArgumentParser:
     continual_run.add_argument("--no-holdout", action="store_true")
     continual_run.add_argument(
         "--criterion", choices=("margin", "guardrail"), default="margin",
-        help="promotion rule: fixed margin (V1) or probe guardrail (V2)",
+        help="promotion rule: fixed validation margin or held-out probe guardrail",
     )
     continual_run.add_argument("--guard-tolerance", type=float, default=0.02)
     continual_run.add_argument("--min-gain", type=float, default=0.0)
     continual_run.add_argument(
         "--select", action="store_true",
-        help="V2 step 2: let the agent re-select the feature family and classifier each round",
+        help="re-select the feature family and classifier each round",
     )
     continual_run.add_argument("--selection-budget", type=float, default=12.0)
     continual_run.add_argument(

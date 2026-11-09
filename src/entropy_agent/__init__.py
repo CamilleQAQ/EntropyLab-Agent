@@ -1,7 +1,6 @@
-"""EntropyLab v2 clean core.
+"""Dataset-agnostic core for EntropyLab Agent.
 
-This package is the new, dataset-agnostic core.  Concrete dataset adapters are
-assembled at the application boundary and are not imported here.
+Concrete dataset adapters are assembled at the application boundary.
 """
 
 __version__ = "0.1.0.dev0"

@@ -1,4 +1,4 @@
-"""Per-round candidate selection for continual learning (V2 step 2).
+"""Per-round candidate selection for continual learning.
 
 The Agent's action at each round is no longer "retrain the fixed configuration":
 it may train any candidate from the pool (feature family x classifier) and commit

@@ -34,7 +34,7 @@ class Batch:
     groups: tuple[str, ...]
     note: str = ""
     # Probe groups belong to this batch's domain but are never trained on: they
-    # measure retention and new-domain gains for the V2 decision layer.
+    # measure retention and new-domain gains for the probe rule.
     probe_groups: tuple[str, ...] = ()
     # Additional labeled measurements used only after this batch becomes old.
     retention_probe_groups: tuple[str, ...] = ()

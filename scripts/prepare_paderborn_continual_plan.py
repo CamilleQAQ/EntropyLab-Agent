@@ -4,9 +4,8 @@
 Allocation, per (class, condition), from the 20 measurements:
 
 * holdout   4 measurements - frozen, never trained, scored once at the end;
-* probe     3 measurements - frozen, never trained, reserved for the V2 decision
-            layer (retention / new-domain gain). The V1 retraining loop ignores
-            them;
+* probe     3 measurements - held out from training to measure retention and
+            new-domain gain;
 * train     13 measurements - the round's training data.
 
 Rounds are the three N15 operating conditions, ordered from the reference

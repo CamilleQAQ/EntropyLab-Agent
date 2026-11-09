@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run the v1.1 Agent and its same-budget controls on one dataset.
+"""Benchmark feature selection against fixed, random, and exhaustive search.
 
 The dataset is injected through a ``DatasetSpec`` file; this script holds no
 dataset-specific logic.  Every arm is repeated over several split seeds, and the
@@ -32,7 +32,7 @@ def main() -> int:
         type=int,
         default=None,
         help=(
-            "v1.2 budget: how many entropy methods to pay a feature extraction "
+            "Feature budget: how many methods to pay a feature extraction "
             "for; each paid unit evaluates all of its classifiers. Overrides "
             "--rounds/--per-round."
         ),
@@ -42,7 +42,7 @@ def main() -> int:
         type=float,
         default=None,
         help=(
-            "v1.4 budget: total estimated feature-extraction seconds. One unit "
+            "Time budget: total estimated feature-extraction seconds. One unit "
             "costs its estimated price and buys all classifiers of that method."
         ),
     )

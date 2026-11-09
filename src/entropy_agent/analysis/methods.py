@@ -1,4 +1,4 @@
-"""Small, explicit method catalogue offered to the V1 planner.
+"""Catalogue of entropy methods available to the planner.
 
 This is a policy subset, not a second implementation of the numerical toolbox.
 The bundled toolbox owns the eight entropy methods and every calculation.

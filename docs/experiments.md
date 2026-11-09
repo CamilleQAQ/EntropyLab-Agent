@@ -17,7 +17,7 @@
 固定顺序、随机搜索和 Agent 共用相同的成本模型。穷举覆盖全部候选，用作验证分数参照。预算按特征提取的预估成本计费，实验另行记录实际耗时。将三轴轴承数据准备为配置所需的本地数据后运行：
 
 ```powershell
-python scripts/run_agent_v1.py `
+python -m entropy_agent.cli agent run `
   --spec configs/triaxial_7class_tsmefude_btlssvm.json `
   --data-root data/paper/triaxial_7class `
   --output results/triaxial-budget `

@@ -1,17 +1,8 @@
-"""The 5-round Agent loop (v1.1): repeated validation, multi-seed, one test.
+"""Run budgeted feature selection with group-isolated validation and test.
 
-What changed from v1:
-
-* features are cached per record, so a new split seed or a new classifier pays
-  nothing for extraction;
-* every trial is scored on several group-isolated validation splits and reports
-  mean and standard deviation instead of a single fragile number;
-* the same arms are repeated over several split seeds and the report aggregates
-  them, so "agent beats random" can be stated with a spread;
-* each proposal carries the selector's reason into the memory and the report.
-
-Discipline is unchanged: selection reads validation only, and the test partition
-is scored exactly once, for the champion, after every arm has finished.
+Cache features per record and compare search strategies across split seeds.
+Choose candidates on validation scores and evaluate selected candidates on
+held-out test data according to the configured test mode.
 """
 
 from __future__ import annotations
@@ -348,7 +339,7 @@ def _exhaustive_arm(context: _Context, pool: Sequence[Candidate]) -> list[TrialR
     ]
 
 
-# --- v1.2: the expensive currency is a feature extraction, not a trial -------
+# --- Group candidates by feature extraction cost -----------------------------
 #
 # One extraction of an entropy method costs 40-350 s; fitting its remaining five
 # classifiers costs about half a second.  Counting "trials" made those two
@@ -624,14 +615,7 @@ def _write_report(
     model_directory: Path,
     model_id: str | None,
 ) -> None:
-    lines: list[str] = []
-    if budget.get("budget_seconds") is not None:
-        lines.append("# Agent v1.4 运行报告（秒预算）")
-    elif budget.get("units") is not None:
-        lines.append("# Agent v1.2 运行报告")
-    else:
-        lines.append("# Agent v1.1 运行报告")
-    lines.append("")
+    lines = ["# 特征选型报告", ""]
     lines.append(f"- run_id：`{run_id}`")
     lines.append(f"- 生成时间：{datetime.now(timezone.utc).isoformat()}")
     lines.append(
@@ -865,9 +849,9 @@ def run_agent(
 ) -> dict:
     """Run the Agent and its same-budget controls across split seeds.
 
-    ``units`` switches the budget to feature extractions (v1.2): one unit is one
+    ``units`` sets a feature extraction budget: one unit is one
     entropy method with its parameters, and choosing a unit evaluates every
-    classifier for it.  Without ``units`` the legacy trial budget is used.
+    classifier for it. The default budget counts candidate trials.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -1,17 +1,12 @@
 """The promotion decision, separated from the training loop.
 
-V1 used a single rule: promote when validation macro-F1 beats the champion by a
-fixed margin.  That rule is unidentifiable once the validation set saturates (a
-champion at 1.000 can never be beaten), so batches stop being accepted even when
-they would help.
-
-V2 splits the decision into a guardrail and an objective:
+The probe rule splits the decision into a guardrail and an objective:
 
 * **guardrail** - retention on probe sets that were never trained (the worst drop
   over the reference-domain validation set and every previous batch's probes);
 * **objective**  - gain on the new batch's probe.
 
-The margin rule is kept for comparison runs.
+The fixed validation margin is available as a comparison baseline.
 """
 
 from __future__ import annotations
