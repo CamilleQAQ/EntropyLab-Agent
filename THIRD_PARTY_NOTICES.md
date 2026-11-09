@@ -38,9 +38,9 @@ distribution and no redistribution rights are claimed for them.
 
 The IMFRDE implementation was integrated from a user-supplied Python migration
 of retained `IMFuRDE.m` material. Four MATLAB-generated fixtures verify its
-numeric behavior. The retained source did not include an explicit standalone
-license, so redistribution permission remains to be documented before an
-external release.
+numeric behavior. The project maintainer confirmed on 2026-11-09 that they
+hold the right to redistribute the IMFRDE implementation publicly in this
+repository. The retained source did not include a standalone license notice.
 
 Runtime dependencies:
 
