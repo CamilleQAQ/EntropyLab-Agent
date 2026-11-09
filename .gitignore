@@ -11,3 +11,10 @@ models/
 .env
 data-sources/
 .pytest-tmp/
+
+# Local research notes and exploratory runs
+/HANDOFF.md
+/docs/_archive/
+/docs/19_v2_selection.md
+/docs/20_v2_budget_action.md
+/docs/24_ablation.md
