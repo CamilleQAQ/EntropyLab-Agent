@@ -1,8 +1,8 @@
 """Task-level evaluation for the research lab.
 
-Each task is a dataset + goal + expectations.  The score is not "did it find a
-good model" but "did it run the research process properly": experiments actually
-ran, enough splits, no repeated calls, grounded hypotheses, a report with limits.
+Each task defines a dataset, goal, and expectations. Process checks cover actual
+execution and reporting. Paired recall tasks also verify the submitted conclusion
+against the control experiment recorded in the ledger.
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ import json
 import pathlib
 from dataclasses import dataclass
 from pathlib import Path
+
+from .recall_control import CONTROL_TOOL, recall_conclusion_checks
 
 EXPERIMENT_TOOLS = {"run_experiment", "run_custom_experiment"}
 
@@ -79,7 +81,9 @@ def score(expect: dict | None, summary: dict, *, truth: list[tuple[str, str]] | 
 
     checks["finished"] = summary.get("status") == "done"
 
-    experiments = [item for item in rows if item.get("tool") in EXPERIMENT_TOOLS]
+    paired_recall = expect.get("paired_recall_conclusion", False)
+    experiment_tools = {CONTROL_TOOL} if paired_recall else EXPERIMENT_TOOLS
+    experiments = [item for item in rows if item.get("tool") in experiment_tools]
     checks["has_experiment"] = len(experiments) >= int(expect.get("min_experiments", 1))
 
     min_seeds = int(expect.get("min_seeds", 3))
@@ -126,6 +130,9 @@ def score(expect: dict | None, summary: dict, *, truth: list[tuple[str, str]] | 
             keyword in report_text
             for keyword in ("control", "对照", "下采样", "downsampl", "baseline comparison")
         )
+
+    if paired_recall:
+        checks.update(recall_conclusion_checks(rows, min_seeds))
 
     passed = sum(1 for value in checks.values() if value)
     total = len(checks)

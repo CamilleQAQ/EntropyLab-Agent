@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from entropy_agent.lab.eval import Task, load_tasks, score
+from entropy_agent.lab.recall_control import CONCLUSION_TOOL, CONTROL_TOOL
 
 
 def _summary(tmp_path: Path, **overrides) -> dict:
@@ -72,3 +73,46 @@ def test_ledger_shaped_rows_are_scored(tmp_path: Path) -> None:
     ]
     result = score({"min_seeds": 3}, _summary(tmp_path, experiments=experiments))
     assert result["score"] == 1.0, result["failed"]
+
+
+def test_recall_conclusion_is_scored_against_its_paired_ledger_rows() -> None:
+    control = {
+        "tool": CONTROL_TOOL,
+        "evidence_id": "control-1",
+        "seeds": 5,
+        "per_seed": [
+            {
+                "seed": seed,
+                "healthy_training_groups": ["normal-a", "normal-b"],
+                "removed_healthy_training_group": "normal-b",
+                "validation_groups": ["normal-c"],
+                "healthy_validation_records": 6,
+                "baseline": {"true_positives": 6},
+                "downsampled": {"true_positives": 3},
+            }
+            for seed in range(5)
+        ],
+    }
+    submission = {
+        "tool": CONCLUSION_TOOL,
+        "conclusion": {
+            "evidence_id": "control-1",
+            "baseline_mean_recall": 1.0,
+            "downsampled_mean_recall": 0.5,
+            "direction": "decreased",
+            "scope": "observed_splits",
+        },
+    }
+    expect = {"paired_recall_conclusion": True, "min_seeds": 5}
+    summary = {"experiments": [{"payload": control}]}
+    assert not score(expect, summary)["checks"]["submitted_conclusion"]
+    summary["experiments"].append({"payload": submission})
+    result = score(expect, summary)["checks"]
+    assert result["conclusion_recall_matches_ledger"]
+    assert result["conclusion_direction_matches_ledger"]
+    submission["conclusion"].update(direction="increased", downsampled_mean_recall=0.9)
+    result = score(expect, summary)["checks"]
+    assert not result["conclusion_recall_matches_ledger"]
+    assert not result["conclusion_direction_matches_ledger"]
+    submission["conclusion"]["evidence_id"] = "unrelated-run"
+    assert not score(expect, summary)["checks"]["conclusion_cites_control"]

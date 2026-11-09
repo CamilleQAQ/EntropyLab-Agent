@@ -45,14 +45,18 @@ def main() -> int:
         config, data = DATASETS[task.dataset]
         spec = load_dataset_spec(ROOT / config)
         workspace = args.output / task.task_id
+        paired_recall = bool((task.expect or {}).get("paired_recall_conclusion"))
         ctx = LabContext(
             spec=spec,
             data_root=ROOT / data,
             workspace=workspace,
             goal=task.goal,
             budget_seconds=args.budget,
+            recall_control_task=paired_recall,
         )
         try:
+            if paired_recall and (workspace / "ledger.sqlite").exists():
+                raise ValueError("paired recall evaluation needs a fresh --output directory")
             summary = run_lab(ctx, goal=task.goal, max_rounds=task.max_rounds, llm=chat)
         except Exception as error:  # a failed task must not stop the suite
             rows.append(
@@ -61,7 +65,7 @@ def main() -> int:
                     "dataset": task.dataset,
                     "score": 0.0,
                     "passed": 0,
-                    "total": 9,
+                    "total": score(task.expect, {})["total"],
                     "failed": f"ERROR: {type(error).__name__}: {error}"[:160],
                 }
             )
@@ -69,6 +73,10 @@ def main() -> int:
             continue
 
         result = score(task.expect, summary)
+        if paired_recall:
+            (workspace / "assessment.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
         rows.append(
             {
                 "task": task.task_id,

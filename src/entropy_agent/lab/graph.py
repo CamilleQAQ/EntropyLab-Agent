@@ -16,6 +16,7 @@ from . import grounding
 from .custom import catalogue as custom_catalogue
 from .ledger import Ledger
 from .llm import chat
+from .recall_control import CONCLUSION_TOOL, CONTROL_TOOL, RecallConclusion
 from .reviewer import review_experiment
 from .tools import TOOL_SPECS, LabContext, tool_catalogue
 
@@ -27,6 +28,7 @@ class Action(BaseModel):
         "analyze_errors",
         "search_notes",
         "run_custom_experiment",
+        "run_healthy_recall_control",
         "finish",
         "ask_human",
     ]
@@ -91,6 +93,12 @@ def _compact(history: list[dict]) -> str:
     for item in history[-8:]:
         if item.get("error"):
             lines.append(f"- {item['tool']} FAILED: {item['error'][:120]}")
+        elif item.get("tool") == CONTROL_TOOL:
+            evidence = {key: item[key] for key in ("evidence_id", "healthy_label")}
+            evidence["recall_pairs"] = [
+                [pair["baseline"]["recall"], pair["downsampled"]["recall"]] for pair in item["per_seed"]
+            ]
+            lines.append(f"- {CONTROL_TOOL}: {json.dumps(evidence, ensure_ascii=False)}")
         elif item.get("tool") == "run_experiment" and "macro_f1_mean" in item:
             lines.append(
                 f"- run_experiment {item['feature']}+{item['classifier']} seeds={item['seeds']} "
@@ -132,7 +140,18 @@ def build_graph(ctx: LabContext, llm=chat, checkpointer=None):
         history = state.get("history", [])
         ran_experiment = any(item.get("tool") == "run_experiment" for item in history)
         hint = ""
-        if not ran_experiment:
+        if ctx.recall_control_task:
+            if any(item.get("tool") == CONTROL_TOOL and not item.get("error") for item in history):
+                hint = (
+                    "\nNow submit your own conclusion with action=finish. Its args must match this schema: "
+                    + json.dumps(RecallConclusion.model_json_schema())
+                    + " Each recall pair is [baseline, downsampled]. Compute each arm's unweighted mean "
+                    "over splits on the 0–1 scale. Use decreased/increased only if every split changes "
+                    "strictly in that direction; otherwise use inconclusive. Limit it to the observed splits."
+                )
+            else:
+                hint = f"\nYour next action must be {CONTROL_TOOL} with args={{}}. State a testable hypothesis."
+        elif not ran_experiment:
             hint = (
                 "\nIMPORTANT: no experiment has been run yet. The next action MUST be "
                 "run_experiment with seeds >= 3 (pick a feature and a classifier from the "
@@ -158,7 +177,11 @@ def build_graph(ctx: LabContext, llm=chat, checkpointer=None):
             )
         raw = llm(
             [
-                {"role": "system", "content": SYSTEM_PROMPT + tool_catalogue() + extra},
+                {"role": "system", "content": SYSTEM_PROMPT + tool_catalogue() + extra + (
+                    "\nFor the paired recall task, the task-specific user instructions take precedence "
+                    "over the generic run_experiment, search_notes and claim rules."
+                    if ctx.recall_control_task else ""
+                )},
                 {"role": "user", "content": prompt},
             ]
         )
@@ -304,6 +327,18 @@ def build_graph(ctx: LabContext, llm=chat, checkpointer=None):
             elif item.get("tool") == "review":
                 codes = [finding["code"] for finding in item["findings"]]
                 lines.append(f"- 审查：{item['verdict']} {codes}")
+            elif item.get("tool") == CONTROL_TOOL:
+                lines.append(f"- {item['healthy_label']} 配对召回，证据 {item['evidence_id']}")
+                for pair in item["per_seed"]:
+                    lines.append(
+                        f"  - {pair['seed']} 基线 {pair['baseline']['recall']:.4f}，"
+                        f"下采样 {pair['downsampled']['recall']:.4f}"
+                    )
+        action = state.get("action", {})
+        if ctx.recall_control_task and state.get("status") == "finish" and action.get("action") == "finish":
+            conclusion = action["args"]
+            ledger.record_experiment(state["rounds"], CONCLUSION_TOOL, {"tool": CONCLUSION_TOOL, "conclusion": conclusion})
+            lines += ["", "## Agent 提交的结论", "", "```json", json.dumps(conclusion, ensure_ascii=False), "```"]
         lines += ["", "## 假设", ""]
         for row in ledger.hypotheses():
             flag = " ⚠" if "未通过校验" in (row["evidence"] or "") else ""

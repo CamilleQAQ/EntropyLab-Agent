@@ -15,15 +15,13 @@
     {
       "id": "cwru-class-imbalance",
       "dataset": "cwru",
-      "goal": "找出 NORMAL 类样本少（4 个录制）对指标的影响，并给出改进方向",
+      "goal": "用同一组录制级划分比较完整训练和移除一个 NORMAL 训练录制的对照，提交 NORMAL 召回率和证据范围内的结论",
       "max_rounds": 3,
       "expect": {
         "min_experiments": 1,
-        "min_seeds": 3,
+        "min_seeds": 5,
         "min_hypotheses": 1,
-        "top_k": 3,
-        "require_per_class_recall": true,
-        "require_control": true
+        "paired_recall_conclusion": true
       }
     },
     {

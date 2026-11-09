@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from ..agent.candidates import DEFAULT_CLASSIFIERS, DEFAULT_METHODS
 from ..io.dataset import DatasetSpec, load_dataset_records
 from ..training.pipeline import evaluate_partition, prepare_dataset, train_dataset
+from .recall_control import CONTROL_TOOL, RecallControlArgs, run_healthy_recall_control
 
 
 @dataclass
@@ -31,6 +32,7 @@ class LabContext:
     budget_seconds: float = 600.0
     spent_seconds: float = 0.0
     experiments: list[dict] = field(default_factory=list)
+    recall_control_task: bool = False
 
     def model_dir(self, tag: str) -> Path:
         path = self.workspace / "models" / f"{tag}-{uuid.uuid4().hex[:8]}"
@@ -282,6 +284,11 @@ def run_custom_experiment(ctx: LabContext, args: CustomExperimentArgs) -> dict:
 
 
 TOOL_SPECS = {
+    CONTROL_TOOL: {
+        "description": "Run five paired validation splits with the configured model. Remove one healthy training recording per split and return both arms' healthy recall.",
+        "args": RecallControlArgs,
+        "fn": run_healthy_recall_control,
+    },
     "profile_dataset": {
         "description": "Read the dataset and return classes, counts, groups, window and sampling rate.",
         "args": ProfileArgs,
